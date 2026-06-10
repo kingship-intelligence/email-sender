@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Email Sender</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="container">
+    <h1>📧 Email Sender</h1>
+    <p class="subtitle">Send emails via your SMTP server</p>
+
+    <form id="emailForm">
+      <fieldset>
+        <legend>SMTP Settings</legend>
+        <div class="row">
+          <div class="field">
+            <label for="smtp_host">SMTP Host</label>
+            <input type="text" id="smtp_host" placeholder="smtp.gmail.com" required />
+          </div>
+          <div class="field field--sm">
+            <label for="smtp_port">Port</label>
+            <input type="number" id="smtp_port" value="587" required />
+          </div>
+        </div>
+        <div class="row">
+          <div class="field">
+            <label for="smtp_user">Username / Email</label>
+            <input type="email" id="smtp_user" placeholder="you@example.com" required />
+          </div>
+          <div class="field">
+            <label for="smtp_pass">Password / App Password</label>
+            <input type="password" id="smtp_pass" placeholder="••••••••" required />
+          </div>
+        </div>
+        <div class="row">
+          <div class="field field--check">
+            <label>
+              <input type="checkbox" id="use_tls" checked />
+              Use STARTTLS (recommended)
+            </label>
+          </div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Message</legend>
+        <div class="field">
+          <label for="from_addr">From (optional — defaults to username)</label>
+          <input type="email" id="from_addr" placeholder="you@example.com" />
+        </div>
+        <div class="field">
+          <label for="to_addr">To</label>
+          <input type="email" id="to_addr" placeholder="recipient@example.com" required />
+        </div>
+        <div class="field">
+          <label for="subject">Subject</label>
+          <input type="text" id="subject" placeholder="Hello!" required />
+        </div>
+        <div class="field">
+          <label for="body">Message</label>
+          <textarea id="body" rows="6" placeholder="Write your message here…" required></textarea>
+        </div>
+      </fieldset>
+
+      <button type="submit" id="sendBtn">Send Email</button>
+    </form>
+
+    <div id="alert" class="alert hidden"></div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
