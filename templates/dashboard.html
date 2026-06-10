@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Dashboard</h1>
+    <p class="page-sub">Your recent campaigns</p>
+  </div>
+  <a href="{{ url_for('campaign_new') }}" class="btn btn--primary">+ New Campaign</a>
+</div>
+
+{% if not current_user.smtp_host %}
+<div class="notice notice--warn">
+  <strong>SMTP not configured.</strong> Before sending campaigns,
+  <a href="{{ url_for('settings') }}">set up your SMTP server</a>.
+</div>
+{% endif %}
+
+{% if campaigns %}
+<div class="table-wrap">
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Campaign</th>
+        <th>Created</th>
+        <th>Recipients</th>
+        <th>Delivered</th>
+        <th>Failed</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for c in campaigns %}
+      <tr>
+        <td><strong>{{ c.name }}</strong><br><small class="muted">{{ c.subject }}</small></td>
+        <td>{{ c.created_at.strftime('%b %d, %Y') }}</td>
+        <td>{{ c.total }}</td>
+        <td><span class="badge badge--green">{{ c.sent_ok }}</span></td>
+        <td>{% if c.sent_fail %}<span class="badge badge--red">{{ c.sent_fail }}</span>{% else %}<span class="muted">0</span>{% endif %}</td>
+        <td><a href="{{ url_for('campaign_detail', campaign_id=c.id) }}" class="btn btn--sm btn--ghost">View</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="empty-state">
+  <div class="empty-state__icon">🚀</div>
+  <h2>No campaigns yet</h2>
+  <p>Upload a file, extract emails, and send your first campaign in minutes.</p>
+  <a href="{{ url_for('campaign_new') }}" class="btn btn--primary">Create your first campaign</a>
+</div>
+{% endif %}
+{% endblock %}

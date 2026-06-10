@@ -1,0 +1,196 @@
+{% extends "base.html" %}
+{% block title %}New Campaign{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">New Campaign</h1>
+    <p class="page-sub">Extract emails, generate copy, and send</p>
+  </div>
+</div>
+
+<!-- Step indicator -->
+<div class="steps">
+  <div class="step active" id="step-ind-1">
+    <div class="step__num">1</div>
+    <div class="step__label">Extract Emails</div>
+  </div>
+  <div class="step-line"></div>
+  <div class="step" id="step-ind-2">
+    <div class="step__num">2</div>
+    <div class="step__label">Compose Email</div>
+  </div>
+  <div class="step-line"></div>
+  <div class="step" id="step-ind-3">
+    <div class="step__num">3</div>
+    <div class="step__label">Review & Send</div>
+  </div>
+</div>
+
+<!-- STEP 1: Extract -->
+<div class="wizard-step" id="step-1">
+  <div class="card">
+    <h2 class="card-title">Extract Email Addresses</h2>
+    <p class="card-sub">Upload a CSV, Excel, or text file — or enter a webpage URL — and we'll find every email address.</p>
+
+    <div class="tab-bar" id="extract-tabs">
+      <button class="tab active" data-tab="file">Upload File</button>
+      <button class="tab" data-tab="url">Webpage URL</button>
+    </div>
+
+    <div id="tab-file">
+      <div class="upload-zone" id="drop-zone">
+        <input type="file" id="file-input" accept=".csv,.xlsx,.xls,.txt,.text" hidden />
+        <div class="upload-zone__icon">📂</div>
+        <p>Drag & drop or <button type="button" class="btn-link" onclick="document.getElementById('file-input').click()">browse</button></p>
+        <p class="muted small">CSV, Excel (.xlsx), or plain text</p>
+      </div>
+    </div>
+
+    <div id="tab-url" style="display:none">
+      <div class="field">
+        <label for="url-input">Webpage URL</label>
+        <div class="input-row">
+          <input type="url" id="url-input" placeholder="https://example.com/team" />
+          <button type="button" class="btn btn--primary" id="scrape-btn">Extract</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="extract-status" class="status-msg hidden"></div>
+
+    <div id="email-list-wrap" style="display:none">
+      <div class="email-list-header">
+        <strong id="email-count">0 emails found</strong>
+        {% if not current_user.is_pro %}
+        <span class="badge badge--orange">Free plan: first 50 only</span>
+        {% endif %}
+        <button type="button" class="btn btn--sm btn--ghost" id="clear-emails-btn">Clear</button>
+      </div>
+      <div class="email-chips" id="email-chips"></div>
+    </div>
+
+    <div class="wizard-actions">
+      <div></div>
+      <button type="button" class="btn btn--primary" id="step1-next" disabled>Next: Compose →</button>
+    </div>
+  </div>
+</div>
+
+<!-- STEP 2: Compose -->
+<div class="wizard-step" id="step-2" style="display:none">
+  <div class="card">
+    <h2 class="card-title">Compose Your Email</h2>
+    {% if current_user.is_pro %}
+    <p class="card-sub">Describe your campaign and let AI write it — or write your own.</p>
+    {% else %}
+    <p class="card-sub">Write your subject and body below. <a href="{{ url_for('pricing') }}">Upgrade to Pro</a> for AI generation.</p>
+    {% endif %}
+
+    {% if current_user.is_pro %}
+    <div class="ai-box">
+      <div class="field">
+        <label for="brief-input">Campaign brief <span class="muted">(what are you promoting?)</span></label>
+        <textarea id="brief-input" rows="2" placeholder="e.g. Promote our new project management tool to startup founders. Focus on time-saving."></textarea>
+      </div>
+      <div class="field">
+        <label for="campaign-name-ai">Campaign name</label>
+        <input type="text" id="campaign-name-ai" placeholder="My Campaign" />
+      </div>
+      <button type="button" class="btn btn--secondary" id="generate-btn">✨ Generate with AI</button>
+      <div id="generate-status" class="status-msg hidden"></div>
+    </div>
+    {% else %}
+    <div class="field">
+      <label for="campaign-name-manual">Campaign name</label>
+      <input type="text" id="campaign-name-manual" placeholder="My Campaign" />
+    </div>
+    {% endif %}
+
+    <div class="field" style="margin-top:1.25rem">
+      <label for="subject-input">Subject line</label>
+      <input type="text" id="subject-input" placeholder="Your subject line" required />
+    </div>
+    <div class="field">
+      <label for="body-input">Email body</label>
+      <textarea id="body-input" rows="10" placeholder="Write your email here…" required></textarea>
+    </div>
+
+    <div class="wizard-actions">
+      <button type="button" class="btn btn--ghost" id="step2-back">← Back</button>
+      <button type="button" class="btn btn--primary" id="step2-next">Next: Review →</button>
+    </div>
+  </div>
+</div>
+
+<!-- STEP 3: Review & Send -->
+<div class="wizard-step" id="step-3" style="display:none">
+  <div class="card">
+    <h2 class="card-title">Review & Send</h2>
+
+    <div class="review-grid">
+      <div class="review-item">
+        <span class="review-label">Recipients</span>
+        <span class="review-val" id="review-count">—</span>
+      </div>
+      <div class="review-item">
+        <span class="review-label">Subject</span>
+        <span class="review-val" id="review-subject">—</span>
+      </div>
+      <div class="review-item full">
+        <span class="review-label">Preview</span>
+        <pre class="review-body" id="review-body">—</pre>
+      </div>
+      <div class="review-item full">
+        <span class="review-label">SMTP</span>
+        <span class="review-val">
+          {% if current_user.smtp_host %}
+            {{ current_user.smtp_user }} via {{ current_user.smtp_host }}:{{ current_user.smtp_port }}
+          {% else %}
+            <span class="badge badge--red">Not configured — <a href="{{ url_for('settings') }}">set up SMTP</a></span>
+          {% endif %}
+        </span>
+      </div>
+    </div>
+
+    <div id="send-progress" style="display:none">
+      <div class="progress-bar-wrap">
+        <div class="progress-bar" id="progress-bar" style="width:0%"></div>
+      </div>
+      <p class="progress-label" id="progress-label">Sending…</p>
+      <div class="send-log" id="send-log"></div>
+    </div>
+
+    <div id="send-done" style="display:none">
+      <div class="send-summary">
+        <div class="summary-stat summary-stat--green">
+          <span class="stat-num" id="done-ok">0</span>
+          <span class="stat-label">Delivered</span>
+        </div>
+        <div class="summary-stat summary-stat--red">
+          <span class="stat-num" id="done-fail">0</span>
+          <span class="stat-label">Failed</span>
+        </div>
+      </div>
+      <a href="{{ url_for('dashboard') }}" class="btn btn--primary btn--full" style="margin-top:1rem">Back to Dashboard</a>
+    </div>
+
+    <div class="wizard-actions" id="step3-actions">
+      <button type="button" class="btn btn--ghost" id="step3-back">← Back</button>
+      {% if current_user.smtp_host %}
+      <button type="button" class="btn btn--primary btn--send" id="send-btn">📨 Send Campaign</button>
+      {% else %}
+      <a href="{{ url_for('settings') }}" class="btn btn--primary">Configure SMTP first</a>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const IS_PRO = {{ 'true' if current_user.is_pro else 'false' }};
+  const SEND_LIMIT = {{ current_user.send_limit if current_user.send_limit else 'null' }};
+</script>
+<script src="/static/campaign.js"></script>
+{% endblock %}

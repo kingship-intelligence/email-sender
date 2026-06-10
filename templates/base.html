@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}MailBlast{% endblock %} — MailBlast</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body class="app-layout">
+  <aside class="sidebar">
+    <div class="sidebar__brand">
+      <span class="sidebar__logo">✉️</span>
+      <span class="sidebar__name">MailBlast</span>
+    </div>
+    <nav class="sidebar__nav">
+      <a href="{{ url_for('dashboard') }}" class="nav-link {% if request.endpoint == 'dashboard' %}active{% endif %}">
+        <span class="nav-icon">📊</span> Dashboard
+      </a>
+      <a href="{{ url_for('campaign_new') }}" class="nav-link {% if request.endpoint == 'campaign_new' %}active{% endif %}">
+        <span class="nav-icon">🚀</span> New Campaign
+      </a>
+      <a href="{{ url_for('settings') }}" class="nav-link {% if request.endpoint == 'settings' %}active{% endif %}">
+        <span class="nav-icon">⚙️</span> Settings
+      </a>
+      <a href="{{ url_for('pricing') }}" class="nav-link {% if request.endpoint == 'pricing' %}active{% endif %}">
+        <span class="nav-icon">💳</span> Pricing
+      </a>
+    </nav>
+    <div class="sidebar__footer">
+      <div class="plan-badge plan-badge--{{ current_user.plan }}">
+        {{ current_user.plan | upper }} PLAN
+      </div>
+      <div class="sidebar__user">{{ current_user.email }}</div>
+      <a href="{{ url_for('logout') }}" class="logout-link">Sign out</a>
+    </div>
+  </aside>
+
+  <main class="main-content">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for cat, msg in messages %}
+          <div class="flash flash--{{ cat }}">{{ msg }}</div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+  </main>
+
+  {% block scripts %}{% endblock %}
+</body>
+</html>

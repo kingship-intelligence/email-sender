@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Settings</h1>
+    <p class="page-sub">Configure your account and SMTP credentials</p>
+  </div>
+</div>
+
+<div class="settings-grid">
+  <!-- SMTP -->
+  <div class="card">
+    <h2 class="card-title">SMTP Configuration</h2>
+    <p class="card-sub">Your credentials are encrypted and stored securely. They're never exposed to the browser.</p>
+
+    <form method="POST" action="{{ url_for('settings') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+      <div class="row">
+        <div class="field">
+          <label for="smtp_host">SMTP Host</label>
+          <input type="text" id="smtp_host" name="smtp_host" value="{{ current_user.smtp_host or '' }}" placeholder="smtp.gmail.com" />
+        </div>
+        <div class="field field--sm">
+          <label for="smtp_port">Port</label>
+          <input type="number" id="smtp_port" name="smtp_port" value="{{ current_user.smtp_port or 587 }}" />
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <label for="smtp_user">Username / Email</label>
+          <input type="email" id="smtp_user" name="smtp_user" value="{{ current_user.smtp_user or '' }}" placeholder="you@example.com" />
+        </div>
+        <div class="field">
+          <label for="smtp_pass">Password / App Password</label>
+          <input type="password" id="smtp_pass" name="smtp_pass" placeholder="{{ '••••••••  (leave blank to keep)' if current_user.smtp_pass_enc else 'Enter password' }}" />
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <label for="smtp_from">From Address <span class="muted">(optional)</span></label>
+          <input type="email" id="smtp_from" name="smtp_from" value="{{ current_user.smtp_from or '' }}" placeholder="Defaults to username" />
+        </div>
+      </div>
+      <div class="field field--check" style="margin-top:.75rem">
+        <label>
+          <input type="checkbox" name="smtp_use_tls" {{ 'checked' if current_user.smtp_use_tls else '' }} />
+          Use STARTTLS (recommended for port 587)
+        </label>
+      </div>
+      <button type="submit" class="btn btn--primary" style="margin-top:1rem">Save SMTP Settings</button>
+    </form>
+  </div>
+
+  <!-- Account / Plan -->
+  <div class="card">
+    <h2 class="card-title">Your Plan</h2>
+    <div class="plan-info">
+      <div class="plan-current plan-current--{{ current_user.plan }}">
+        <strong>{{ current_user.plan | title }} Plan</strong>
+        {% if current_user.plan == 'free' %}
+          <p>Up to 50 recipients per campaign. No AI generation.</p>
+          <a href="{{ url_for('pricing') }}" class="btn btn--primary" style="margin-top:.75rem">Upgrade to Pro</a>
+        {% else %}
+          <p>Unlimited recipients. AI-powered email generation included.</p>
+          {% if stripe_enabled %}
+          <a href="{{ url_for('billing_portal') }}" class="btn btn--ghost" style="margin-top:.75rem">Manage Billing</a>
+          {% endif %}
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

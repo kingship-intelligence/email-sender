@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}{{ campaign.name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">{{ campaign.name }}</h1>
+    <p class="page-sub">{{ campaign.created_at.strftime('%B %d, %Y at %I:%M %p') }}</p>
+  </div>
+  <a href="{{ url_for('dashboard') }}" class="btn btn--ghost">← Dashboard</a>
+</div>
+
+<div class="stats-row">
+  <div class="stat-card">
+    <div class="stat-card__num">{{ campaign.total }}</div>
+    <div class="stat-card__label">Total Recipients</div>
+  </div>
+  <div class="stat-card stat-card--green">
+    <div class="stat-card__num">{{ campaign.sent_ok }}</div>
+    <div class="stat-card__label">Delivered</div>
+  </div>
+  <div class="stat-card stat-card--red">
+    <div class="stat-card__num">{{ campaign.sent_fail }}</div>
+    <div class="stat-card__label">Failed</div>
+  </div>
+  {% if campaign.total > 0 %}
+  <div class="stat-card">
+    <div class="stat-card__num">{{ ((campaign.sent_ok / campaign.total) * 100) | round(1) }}%</div>
+    <div class="stat-card__label">Delivery Rate</div>
+  </div>
+  {% endif %}
+</div>
+
+<div class="card" style="margin-top:1.5rem">
+  <h2 class="card-title">Email Content</h2>
+  <p><strong>Subject:</strong> {{ campaign.subject }}</p>
+  <pre class="review-body" style="margin-top:.75rem">{{ campaign.body }}</pre>
+</div>
+
+{% if recipients %}
+<div class="card" style="margin-top:1.5rem">
+  <h2 class="card-title">Recipient Log</h2>
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Email</th>
+          <th>Status</th>
+          <th>Sent At</th>
+          <th>Note</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in recipients %}
+        <tr>
+          <td>{{ r.email }}</td>
+          <td>
+            {% if r.status == 'sent' %}
+              <span class="badge badge--green">Sent</span>
+            {% else %}
+              <span class="badge badge--red">Failed</span>
+            {% endif %}
+          </td>
+          <td>{{ r.sent_at.strftime('%H:%M:%S') if r.sent_at else '—' }}</td>
+          <td class="muted small">{{ r.error or '' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

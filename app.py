@@ -1,60 +1,516 @@
 import os
+import re
+import json
+import hashlib
+import base64
 import smtplib
+from datetime import datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from flask import Flask, render_template, request, jsonify
+
+from flask import (
+    Flask, render_template, request, jsonify, redirect,
+    url_for, flash, Response, stream_with_context
+)
+from flask_login import LoginManager, login_user, logout_user, login_required, current_user
+from flask_bcrypt import Bcrypt
+from flask_wtf.csrf import CSRFProtect
+from cryptography.fernet import Fernet
+
+import stripe
+import requests
+from bs4 import BeautifulSoup
+import openpyxl
+import csv
+import io
+
+from models import db, User, Campaign, CampaignRecipient
 
 app = Flask(__name__)
 
+# ── Config ────────────────────────────────────────────────────────────────────
+app.config["SECRET_KEY"] = os.environ.get("SESSION_SECRET", "dev-secret-key-change-me")
+app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get(
+    "DATABASE_URL", "sqlite:///mailblast.db"
+).replace("postgres://", "postgresql://")
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+app.config["WTF_CSRF_TIME_LIMIT"] = None
+app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16 MB upload limit
 
+db.init_app(app)
+bcrypt = Bcrypt(app)
+csrf = CSRFProtect(app)
+
+login_manager = LoginManager(app)
+login_manager.login_view = "login"
+login_manager.login_message_category = "error"
+
+# ── Stripe ────────────────────────────────────────────────────────────────────
+STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
+STRIPE_PUBLISHABLE_KEY = os.environ.get("STRIPE_PUBLISHABLE_KEY", "")
+STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+STRIPE_PRO_PRICE_ID = os.environ.get("STRIPE_PRO_PRICE_ID", "")
+STRIPE_ENABLED = bool(STRIPE_SECRET_KEY)
+
+if STRIPE_ENABLED:
+    stripe.api_key = STRIPE_SECRET_KEY
+
+# ── OpenAI ────────────────────────────────────────────────────────────────────
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
+
+
+def get_fernet():
+    raw = app.config["SECRET_KEY"].encode()
+    key = base64.urlsafe_b64encode(hashlib.sha256(raw).digest())
+    return Fernet(key)
+
+
+def encrypt_password(plain: str) -> str:
+    return get_fernet().encrypt(plain.encode()).decode()
+
+
+def decrypt_password(token: str) -> str:
+    return get_fernet().decrypt(token.encode()).decode()
+
+
+def extract_emails(text: str) -> list[str]:
+    found = EMAIL_RE.findall(text)
+    seen = set()
+    result = []
+    for e in found:
+        e_lower = e.lower()
+        if e_lower not in seen:
+            seen.add(e_lower)
+            result.append(e_lower)
+    return result
+
+
+@login_manager.user_loader
+def load_user(user_id):
+    return User.query.get(int(user_id))
+
+
+def get_domain():
+    domain = os.environ.get("REPLIT_DEV_DOMAIN", "")
+    if domain:
+        return f"https://{domain}"
+    return request.host_url.rstrip("/")
+
+
+# ── Auth Routes ───────────────────────────────────────────────────────────────
 @app.route("/")
 def index():
-    return render_template("index.html")
+    if current_user.is_authenticated:
+        return redirect(url_for("dashboard"))
+    return redirect(url_for("login"))
 
 
-@app.route("/send", methods=["POST"])
-def send_email():
-    data = request.get_json()
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if current_user.is_authenticated:
+        return redirect(url_for("dashboard"))
+    if request.method == "POST":
+        email = request.form.get("email", "").strip().lower()
+        password = request.form.get("password", "")
+        user = User.query.filter_by(email=email).first()
+        if user and bcrypt.check_password_hash(user.password_hash, password):
+            login_user(user)
+            return redirect(url_for("dashboard"))
+        flash("Invalid email or password.", "error")
+    return render_template("login.html")
 
-    smtp_host = data.get("smtp_host", "").strip()
-    smtp_port = int(data.get("smtp_port", 587))
-    smtp_user = data.get("smtp_user", "").strip()
-    smtp_pass = data.get("smtp_pass", "").strip()
-    from_addr = data.get("from_addr", "").strip() or smtp_user
-    to_addr = data.get("to_addr", "").strip()
-    subject = data.get("subject", "").strip()
-    body = data.get("body", "").strip()
-    use_tls = data.get("use_tls", True)
 
-    if not all([smtp_host, smtp_user, smtp_pass, to_addr, subject, body]):
-        return jsonify({"success": False, "error": "All fields are required."}), 400
+@app.route("/register", methods=["GET", "POST"])
+def register():
+    if current_user.is_authenticated:
+        return redirect(url_for("dashboard"))
+    if request.method == "POST":
+        email = request.form.get("email", "").strip().lower()
+        password = request.form.get("password", "")
+        password2 = request.form.get("password2", "")
+        if len(password) < 8:
+            flash("Password must be at least 8 characters.", "error")
+        elif password != password2:
+            flash("Passwords do not match.", "error")
+        elif User.query.filter_by(email=email).first():
+            flash("An account with that email already exists.", "error")
+        else:
+            user = User(
+                email=email,
+                password_hash=bcrypt.generate_password_hash(password).decode()
+            )
+            db.session.add(user)
+            db.session.commit()
+            login_user(user)
+            flash("Welcome to MailBlast!", "success")
+            return redirect(url_for("dashboard"))
+    return render_template("register.html")
+
+
+@app.route("/logout")
+@login_required
+def logout():
+    logout_user()
+    return redirect(url_for("login"))
+
+
+# ── Dashboard ─────────────────────────────────────────────────────────────────
+@app.route("/dashboard")
+@login_required
+def dashboard():
+    campaigns = (
+        Campaign.query
+        .filter_by(user_id=current_user.id)
+        .order_by(Campaign.created_at.desc())
+        .all()
+    )
+    return render_template("dashboard.html", campaigns=campaigns)
+
+
+# ── Campaign ──────────────────────────────────────────────────────────────────
+@app.route("/campaign/new")
+@login_required
+def campaign_new():
+    return render_template("campaign_new.html")
+
+
+@app.route("/campaign/<int:campaign_id>")
+@login_required
+def campaign_detail(campaign_id):
+    campaign = Campaign.query.filter_by(id=campaign_id, user_id=current_user.id).first_or_404()
+    recipients = CampaignRecipient.query.filter_by(campaign_id=campaign.id).all()
+    return render_template("campaign_detail.html", campaign=campaign, recipients=recipients)
+
+
+@app.route("/extract", methods=["POST"])
+@login_required
+def extract():
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded."}), 400
+    f = request.files["file"]
+    filename = f.filename.lower()
+    text = ""
 
     try:
-        msg = MIMEMultipart("alternative")
-        msg["From"] = from_addr
-        msg["To"] = to_addr
-        msg["Subject"] = subject
-        msg.attach(MIMEText(body, "plain"))
-
-        if use_tls:
-            server = smtplib.SMTP(smtp_host, smtp_port)
-            server.ehlo()
-            server.starttls()
+        if filename.endswith(".xlsx") or filename.endswith(".xls"):
+            wb = openpyxl.load_workbook(f, data_only=True)
+            for sheet in wb.worksheets:
+                for row in sheet.iter_rows():
+                    for cell in row:
+                        if cell.value:
+                            text += str(cell.value) + " "
         else:
-            server = smtplib.SMTP_SSL(smtp_host, smtp_port)
-
-        server.login(smtp_user, smtp_pass)
-        server.sendmail(from_addr, to_addr, msg.as_string())
-        server.quit()
-
-        return jsonify({"success": True, "message": "Email sent successfully!"})
-    except smtplib.SMTPAuthenticationError:
-        return jsonify({"success": False, "error": "Authentication failed. Check your username/password."}), 400
-    except smtplib.SMTPConnectError:
-        return jsonify({"success": False, "error": f"Could not connect to {smtp_host}:{smtp_port}."}), 400
+            raw = f.read()
+            try:
+                text = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                text = raw.decode("latin-1")
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"error": f"Could not parse file: {e}"}), 400
 
+    emails = extract_emails(text)
+    return jsonify({"emails": emails, "total": len(emails)})
+
+
+@app.route("/extract-url", methods=["POST"])
+@login_required
+def extract_url():
+    data = request.get_json()
+    url = (data or {}).get("url", "").strip()
+    if not url:
+        return jsonify({"error": "URL is required."}), 400
+    if not url.startswith(("http://", "https://")):
+        url = "https://" + url
+    try:
+        resp = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        text = soup.get_text(separator=" ")
+    except Exception as e:
+        return jsonify({"error": f"Could not fetch URL: {e}"}), 400
+
+    emails = extract_emails(text)
+    return jsonify({"emails": emails, "total": len(emails)})
+
+
+@app.route("/generate", methods=["POST"])
+@login_required
+def generate():
+    if not current_user.is_pro:
+        return jsonify({"error": "AI generation requires a Pro plan."}), 403
+    if not OPENAI_API_KEY:
+        return jsonify({"error": "OpenAI is not configured. Contact support."}), 503
+
+    data = request.get_json()
+    brief = (data or {}).get("brief", "").strip()
+    if not brief:
+        return jsonify({"error": "Campaign brief is required."}), 400
+
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a marketing copywriter. Write a concise, engaging marketing email. "
+                        "Return ONLY valid JSON with keys 'subject' (string, max 80 chars) and 'body' (string, plain text, 150-300 words). "
+                        "No markdown, no extra keys, no explanations."
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": f"Campaign brief: {brief}"
+                }
+            ],
+            response_format={"type": "json_object"},
+            max_tokens=600,
+        )
+        result = json.loads(response.choices[0].message.content)
+        if "subject" not in result or "body" not in result:
+            raise ValueError("Missing keys in AI response")
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": f"AI generation failed: {e}"}), 500
+
+
+@app.route("/send-bulk", methods=["POST"])
+@login_required
+def send_bulk():
+    data = request.get_json()
+    emails = (data or {}).get("emails", [])
+    subject = (data or {}).get("subject", "").strip()
+    body = (data or {}).get("body", "").strip()
+    campaign_name = (data or {}).get("name", "Campaign").strip() or "Campaign"
+
+    if not emails or not subject or not body:
+        return jsonify({"error": "emails, subject, and body are required."}), 400
+
+    if not current_user.smtp_host:
+        return jsonify({"error": "SMTP is not configured. Go to Settings."}), 400
+
+    # Enforce free tier limit
+    if not current_user.is_pro and len(emails) > 50:
+        emails = emails[:50]
+
+    smtp_host = current_user.smtp_host
+    smtp_port = current_user.smtp_port
+    smtp_user = current_user.smtp_user
+    smtp_pass = decrypt_password(current_user.smtp_pass_enc)
+    use_tls = current_user.smtp_use_tls
+    from_addr = current_user.smtp_from or smtp_user
+
+    # Create campaign record
+    campaign = Campaign(
+        user_id=current_user.id,
+        name=campaign_name,
+        subject=subject,
+        body=body,
+        total=len(emails),
+    )
+    db.session.add(campaign)
+    db.session.flush()
+
+    recipients = []
+    for email in emails:
+        r = CampaignRecipient(campaign_id=campaign.id, email=email)
+        db.session.add(r)
+        recipients.append(r)
+    db.session.commit()
+
+    def stream():
+        ok = 0
+        fail = 0
+        server = None
+        try:
+            if use_tls:
+                server = smtplib.SMTP(smtp_host, smtp_port, timeout=10)
+                server.ehlo()
+                server.starttls()
+            else:
+                server = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=10)
+            server.login(smtp_user, smtp_pass)
+        except Exception as e:
+            # Fail all recipients if connection fails
+            for r in recipients:
+                r.status = "failed"
+                r.error = str(e)
+                fail += 1
+                yield json.dumps({"email": r.email, "status": "failed", "error": str(e)}) + "\n"
+            campaign.sent_ok = 0
+            campaign.sent_fail = fail
+            campaign.status = "completed"
+            db.session.commit()
+            yield json.dumps({"done": True, "ok": ok, "fail": fail, "campaign_id": campaign.id}) + "\n"
+            return
+
+        for r in recipients:
+            try:
+                msg = MIMEMultipart("alternative")
+                msg["From"] = from_addr
+                msg["To"] = r.email
+                msg["Subject"] = subject
+                msg.attach(MIMEText(body, "plain"))
+                server.sendmail(from_addr, r.email, msg.as_string())
+                r.status = "sent"
+                r.sent_at = datetime.utcnow()
+                ok += 1
+                yield json.dumps({"email": r.email, "status": "sent"}) + "\n"
+            except Exception as e:
+                r.status = "failed"
+                r.error = str(e)
+                fail += 1
+                yield json.dumps({"email": r.email, "status": "failed", "error": str(e)}) + "\n"
+            db.session.commit()
+
+        try:
+            server.quit()
+        except Exception:
+            pass
+
+        campaign.sent_ok = ok
+        campaign.sent_fail = fail
+        campaign.status = "completed"
+        db.session.commit()
+        yield json.dumps({"done": True, "ok": ok, "fail": fail, "campaign_id": campaign.id}) + "\n"
+
+    return Response(stream_with_context(stream()), mimetype="application/x-ndjson")
+
+
+# ── Settings ──────────────────────────────────────────────────────────────────
+@app.route("/settings", methods=["GET", "POST"])
+@login_required
+def settings():
+    if request.method == "POST":
+        current_user.smtp_host = request.form.get("smtp_host", "").strip() or None
+        current_user.smtp_port = int(request.form.get("smtp_port", 587) or 587)
+        current_user.smtp_user = request.form.get("smtp_user", "").strip() or None
+        current_user.smtp_from = request.form.get("smtp_from", "").strip() or None
+        current_user.smtp_use_tls = "smtp_use_tls" in request.form
+        new_pass = request.form.get("smtp_pass", "").strip()
+        if new_pass:
+            current_user.smtp_pass_enc = encrypt_password(new_pass)
+        db.session.commit()
+        flash("Settings saved.", "success")
+        return redirect(url_for("settings"))
+    return render_template("settings.html", stripe_enabled=STRIPE_ENABLED)
+
+
+# ── Stripe / Pricing ──────────────────────────────────────────────────────────
+@app.route("/pricing")
+@login_required
+def pricing():
+    return render_template("pricing.html", stripe_enabled=STRIPE_ENABLED)
+
+
+@app.route("/subscribe")
+@login_required
+def subscribe():
+    if not STRIPE_ENABLED:
+        flash("Payments are not configured yet.", "error")
+        return redirect(url_for("pricing"))
+    if not STRIPE_PRO_PRICE_ID:
+        flash("Pro plan price not configured. Contact support.", "error")
+        return redirect(url_for("pricing"))
+
+    try:
+        # Create or retrieve Stripe customer
+        if not current_user.stripe_customer_id:
+            customer = stripe.Customer.create(email=current_user.email)
+            current_user.stripe_customer_id = customer.id
+            db.session.commit()
+
+        domain = get_domain()
+        session = stripe.checkout.Session.create(
+            customer=current_user.stripe_customer_id,
+            payment_method_types=["card"],
+            line_items=[{"price": STRIPE_PRO_PRICE_ID, "quantity": 1}],
+            mode="subscription",
+            success_url=f"{domain}/subscribe/success?session_id={{CHECKOUT_SESSION_ID}}",
+            cancel_url=f"{domain}/pricing",
+        )
+        return redirect(session.url, code=303)
+    except stripe.error.StripeError as e:
+        flash(f"Stripe error: {e.user_message}", "error")
+        return redirect(url_for("pricing"))
+
+
+@app.route("/subscribe/success")
+@login_required
+def subscribe_success():
+    session_id = request.args.get("session_id")
+    if session_id and STRIPE_ENABLED:
+        try:
+            session = stripe.checkout.Session.retrieve(session_id)
+            if session.subscription:
+                current_user.stripe_subscription_id = session.subscription
+                current_user.plan = "pro"
+                db.session.commit()
+        except Exception:
+            pass
+    flash("Welcome to Pro! Your account has been upgraded.", "success")
+    return redirect(url_for("dashboard"))
+
+
+@app.route("/billing-portal")
+@login_required
+def billing_portal():
+    if not STRIPE_ENABLED or not current_user.stripe_customer_id:
+        flash("Billing portal is not available.", "error")
+        return redirect(url_for("settings"))
+    try:
+        domain = get_domain()
+        portal = stripe.billing_portal.Session.create(
+            customer=current_user.stripe_customer_id,
+            return_url=f"{domain}/settings",
+        )
+        return redirect(portal.url, code=303)
+    except stripe.error.StripeError as e:
+        flash(f"Could not open billing portal: {e.user_message}", "error")
+        return redirect(url_for("settings"))
+
+
+@app.route("/webhook", methods=["POST"])
+@csrf.exempt
+def stripe_webhook():
+    payload = request.data
+    sig_header = request.headers.get("Stripe-Signature", "")
+
+    if not STRIPE_ENABLED or not STRIPE_WEBHOOK_SECRET:
+        return jsonify({"error": "Webhooks not configured"}), 400
+
+    try:
+        event = stripe.Webhook.construct_event(payload, sig_header, STRIPE_WEBHOOK_SECRET)
+    except (ValueError, stripe.error.SignatureVerificationError):
+        return jsonify({"error": "Invalid payload"}), 400
+
+    if event["type"] == "customer.subscription.updated":
+        sub = event["data"]["object"]
+        user = User.query.filter_by(stripe_customer_id=sub["customer"]).first()
+        if user:
+            user.stripe_subscription_id = sub["id"]
+            user.plan = "pro" if sub["status"] in ("active", "trialing") else "free"
+            db.session.commit()
+
+    elif event["type"] == "customer.subscription.deleted":
+        sub = event["data"]["object"]
+        user = User.query.filter_by(stripe_customer_id=sub["customer"]).first()
+        if user:
+            user.plan = "free"
+            user.stripe_subscription_id = None
+            db.session.commit()
+
+    return jsonify({"received": True})
+
+
+# ── Init ──────────────────────────────────────────────────────────────────────
+with app.app_context():
+    db.create_all()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
