@@ -514,6 +514,9 @@ textarea { resize: vertical; }
 .pricing-price { font-size: 2.5rem; font-weight: 900; color: var(--dark); margin-bottom: 1.25rem; }
 .pricing-price span { font-size: 1rem; font-weight: 400; color: var(--gray-400); }
 .pricing-features { list-style: none; display: flex; flex-direction: column; gap: .6rem; margin-bottom: 1.5rem; font-size: .9rem; color: var(--gray-700); }
+.pricing-features li { display: flex; align-items: center; gap: .5rem; }
+.feat-yes { display: inline-flex; align-items: center; flex-shrink: 0; color: #16a34a; }
+.feat-no  { display: inline-flex; align-items: center; flex-shrink: 0; color: #dc2626; }
 
 /* ── Status message ──────────────────────────────────────────── */
 .status-msg { font-size: .85rem; padding: .6rem .75rem; border-radius: var(--radius); margin-top: .75rem; }
