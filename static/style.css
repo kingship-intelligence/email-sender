@@ -102,7 +102,7 @@ body { font-family: system-ui, -apple-system, sans-serif; color: var(--gray-900)
 }
 .nav-link:hover  { background: var(--dark-3); color: #fff; }
 .nav-link.active { background: var(--orange); color: #fff; font-weight: 600; }
-.nav-icon { font-size: 1rem; }
+.nav-icon { display: inline-flex; align-items: center; flex-shrink: 0; width: 16px; height: 16px; }
 
 .sidebar__footer {
   padding: 1rem 1.25rem;
@@ -273,7 +273,7 @@ textarea { resize: vertical; }
   padding: 4rem 2rem;
   color: var(--gray-600);
 }
-.empty-state__icon { font-size: 3rem; margin-bottom: 1rem; }
+.empty-state__icon { display: flex; justify-content: center; align-items: center; margin-bottom: 1rem; color: var(--orange); }
 .empty-state h2 { font-size: 1.25rem; font-weight: 700; margin-bottom: .5rem; color: var(--dark); }
 .empty-state p { margin-bottom: 1.5rem; }
 

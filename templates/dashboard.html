@@ -46,7 +46,9 @@
 </div>
 {% else %}
 <div class="empty-state">
-  <div class="empty-state__icon">🚀</div>
+  <div class="empty-state__icon">
+    <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+  </div>
   <h2>No campaigns yet</h2>
   <p>Upload a file, extract emails, and send your first campaign in minutes.</p>
   <a href="{{ url_for('campaign_new') }}" class="btn btn--primary">Create your first campaign</a>
