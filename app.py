@@ -453,11 +453,17 @@ def send_bulk():
     db.session.add(campaign)
     db.session.flush()
 
-    recipients = []
+    recipient_rows = []
     for email in emails:
         r = CampaignRecipient(campaign_id=campaign.id, email=email)
         db.session.add(r)
-        recipients.append(r)
+        recipient_rows.append(r)
+    db.session.flush()
+
+    # Capture all data we need from ORM objects as plain Python values
+    # BEFORE commit() expires them — avoids DetachedInstanceError in the generator.
+    campaign_id = campaign.id
+    recipient_data = [{"id": r.id, "email": r.email} for r in recipient_rows]
     db.session.commit()
 
     def stream():
@@ -473,23 +479,28 @@ def send_bulk():
                 server = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=10)
             server.login(smtp_user, smtp_pass)
         except Exception as e:
-            for r in recipients:
-                r.status = "failed"
-                r.error = str(e)
-                fail += 1
-                yield json.dumps({"email": r.email, "status": "failed", "error": str(e)}) + "\n"
-            campaign.sent_ok = 0
-            campaign.sent_fail = fail
-            campaign.status = "completed"
-            db.session.commit()
-            yield json.dumps({"done": True, "ok": ok, "fail": fail, "campaign_id": campaign.id}) + "\n"
+            err_str = str(e)
+            with app.app_context():
+                for rd in recipient_data:
+                    CampaignRecipient.query.filter_by(id=rd["id"]).update(
+                        {"status": "failed", "error": err_str}
+                    )
+                    fail += 1
+                    yield json.dumps({"email": rd["email"], "status": "failed", "error": err_str}) + "\n"
+                Campaign.query.filter_by(id=campaign_id).update(
+                    {"sent_ok": 0, "sent_fail": fail, "status": "completed"}
+                )
+                db.session.commit()
+            yield json.dumps({"done": True, "ok": 0, "fail": fail, "campaign_id": campaign_id}) + "\n"
             return
 
-        for r in recipients:
+        for rd in recipient_data:
+            r_email = rd["email"]
+            r_id = rd["id"]
             try:
                 msg = MIMEMultipart("mixed")
                 msg["From"] = from_addr
-                msg["To"] = r.email
+                msg["To"] = r_email
                 msg["Subject"] = subject
                 msg.attach(MIMEText(body, "plain"))
 
@@ -501,28 +512,35 @@ def send_bulk():
                     part.add_header("Content-Disposition", "attachment", filename=att_name)
                     msg.attach(part)
 
-                server.sendmail(from_addr, r.email, msg.as_string())
-                r.status = "sent"
-                r.sent_at = datetime.utcnow()
+                server.sendmail(from_addr, r_email, msg.as_string())
+                with app.app_context():
+                    CampaignRecipient.query.filter_by(id=r_id).update(
+                        {"status": "sent", "sent_at": datetime.utcnow()}
+                    )
+                    db.session.commit()
                 ok += 1
-                yield json.dumps({"email": r.email, "status": "sent"}) + "\n"
+                yield json.dumps({"email": r_email, "status": "sent"}) + "\n"
             except Exception as e:
-                r.status = "failed"
-                r.error = str(e)
+                err_str = str(e)
+                with app.app_context():
+                    CampaignRecipient.query.filter_by(id=r_id).update(
+                        {"status": "failed", "error": err_str}
+                    )
+                    db.session.commit()
                 fail += 1
-                yield json.dumps({"email": r.email, "status": "failed", "error": str(e)}) + "\n"
-            db.session.commit()
+                yield json.dumps({"email": r_email, "status": "failed", "error": err_str}) + "\n"
 
         try:
             server.quit()
         except Exception:
             pass
 
-        campaign.sent_ok = ok
-        campaign.sent_fail = fail
-        campaign.status = "completed"
-        db.session.commit()
-        yield json.dumps({"done": True, "ok": ok, "fail": fail, "campaign_id": campaign.id}) + "\n"
+        with app.app_context():
+            Campaign.query.filter_by(id=campaign_id).update(
+                {"sent_ok": ok, "sent_fail": fail, "status": "completed"}
+            )
+            db.session.commit()
+        yield json.dumps({"done": True, "ok": ok, "fail": fail, "campaign_id": campaign_id}) + "\n"
 
     return Response(stream_with_context(stream()), mimetype="application/x-ndjson")
 
