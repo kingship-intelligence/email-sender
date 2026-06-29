@@ -18,10 +18,11 @@ from flask import (
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from flask_bcrypt import Bcrypt
 from flask_wtf.csrf import CSRFProtect
+from flask_session import Session
 from cryptography.fernet import Fernet
 
 import stripe
-import requests
+import requests as req_lib
 from bs4 import BeautifulSoup
 import openpyxl
 import csv
@@ -32,7 +33,13 @@ from models import db, User, Campaign, CampaignRecipient
 app = Flask(__name__)
 
 # ── Config ────────────────────────────────────────────────────────────────────
-app.config["SECRET_KEY"] = os.environ.get("SESSION_SECRET", "dev-secret-key-change-me")
+_secret = os.environ.get("SECRET_KEY") or os.environ.get("SESSION_SECRET")
+if not _secret:
+    raise RuntimeError(
+        "SECRET_KEY environment variable is not set. "
+        "Set it to a strong random value before starting the server."
+    )
+app.config["SECRET_KEY"] = _secret
 app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get(
     "DATABASE_URL", "sqlite:///mailblast.db"
 ).replace("postgres://", "postgresql://")
@@ -40,9 +47,16 @@ app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["WTF_CSRF_TIME_LIMIT"] = None
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16 MB upload limit
 
+# ── Server-side sessions ──────────────────────────────────────────────────────
+app.config["SESSION_TYPE"] = "filesystem"
+app.config["SESSION_FILE_DIR"] = os.path.join(os.getcwd(), ".flask_sessions")
+app.config["SESSION_FILE_THRESHOLD"] = 500
+app.config["SESSION_PERMANENT"] = False
+
 db.init_app(app)
 bcrypt = Bcrypt(app)
 csrf = CSRFProtect(app)
+Session(app)
 
 login_manager = LoginManager(app)
 login_manager.login_view = "login"
@@ -218,8 +232,31 @@ def extract():
     return jsonify({"emails": emails, "total": len(emails)})
 
 
+def _hostname_is_safe(hostname: str) -> bool:
+    """Return False if any resolved IP for hostname is a non-public address."""
+    try:
+        infos = socket.getaddrinfo(hostname, None)
+        if not infos:
+            return False
+        for info in infos:
+            addr = info[4][0]
+            ip = ipaddress.ip_address(addr)
+            if (
+                ip.is_private
+                or ip.is_loopback
+                or ip.is_link_local
+                or ip.is_reserved
+                or ip.is_multicast
+                or ip.is_unspecified
+            ):
+                return False
+        return True
+    except Exception:
+        return False
+
+
 def _is_ssrf_safe(url: str) -> bool:
-    """Return False if the URL resolves to a private/loopback/link-local address."""
+    """Return False if the URL scheme is not http/https or resolves to a non-public address."""
     try:
         parsed = urlparse(url)
         if parsed.scheme not in ("http", "https"):
@@ -227,19 +264,32 @@ def _is_ssrf_safe(url: str) -> bool:
         hostname = parsed.hostname
         if not hostname:
             return False
-        # Resolve all addresses for the hostname
-        infos = socket.getaddrinfo(hostname, None)
-        for info in infos:
-            addr = info[4][0]
-            try:
-                ip = ipaddress.ip_address(addr)
-                if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
-                    return False
-            except ValueError:
-                return False
-        return True
+        return _hostname_is_safe(hostname)
     except Exception:
         return False
+
+
+def _safe_fetch(url: str, max_redirects: int = 5) -> "req_lib.Response":
+    """Fetch a URL, validating SSRF safety at every redirect hop."""
+    _HEADERS = {"User-Agent": "Mozilla/5.0"}
+    for _ in range(max_redirects + 1):
+        if not _is_ssrf_safe(url):
+            raise ValueError(f"Blocked: {url} resolves to a private/internal address")
+        resp = req_lib.get(url, timeout=10, headers=_HEADERS, allow_redirects=False)
+        if resp.is_redirect or resp.status_code in (301, 302, 303, 307, 308):
+            location = resp.headers.get("Location", "")
+            if not location:
+                break
+            # Resolve relative redirects
+            if location.startswith("/"):
+                parsed = urlparse(url)
+                url = f"{parsed.scheme}://{parsed.netloc}{location}"
+            else:
+                url = location
+        else:
+            resp.raise_for_status()
+            return resp
+    raise ValueError("Too many redirects or redirect loop detected")
 
 
 @app.route("/extract-url", methods=["POST"])
@@ -254,10 +304,11 @@ def extract_url():
     if not _is_ssrf_safe(url):
         return jsonify({"error": "That URL is not allowed."}), 400
     try:
-        resp = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"}, allow_redirects=True)
-        resp.raise_for_status()
+        resp = _safe_fetch(url)
         soup = BeautifulSoup(resp.text, "html.parser")
         text = soup.get_text(separator=" ")
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         return jsonify({"error": f"Could not fetch URL: {e}"}), 400
 
