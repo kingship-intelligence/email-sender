@@ -4,9 +4,12 @@ import json
 import hashlib
 import base64
 import smtplib
+import ipaddress
+import socket
 from datetime import datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from urllib.parse import urlparse
 
 from flask import (
     Flask, render_template, request, jsonify, redirect,
@@ -215,6 +218,30 @@ def extract():
     return jsonify({"emails": emails, "total": len(emails)})
 
 
+def _is_ssrf_safe(url: str) -> bool:
+    """Return False if the URL resolves to a private/loopback/link-local address."""
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            return False
+        hostname = parsed.hostname
+        if not hostname:
+            return False
+        # Resolve all addresses for the hostname
+        infos = socket.getaddrinfo(hostname, None)
+        for info in infos:
+            addr = info[4][0]
+            try:
+                ip = ipaddress.ip_address(addr)
+                if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+                    return False
+            except ValueError:
+                return False
+        return True
+    except Exception:
+        return False
+
+
 @app.route("/extract-url", methods=["POST"])
 @login_required
 def extract_url():
@@ -224,8 +251,10 @@ def extract_url():
         return jsonify({"error": "URL is required."}), 400
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
+    if not _is_ssrf_safe(url):
+        return jsonify({"error": "That URL is not allowed."}), 400
     try:
-        resp = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+        resp = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"}, allow_redirects=True)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
         text = soup.get_text(separator=" ")
@@ -447,7 +476,14 @@ def subscribe_success():
     if session_id and STRIPE_ENABLED:
         try:
             session = stripe.checkout.Session.retrieve(session_id)
-            if session.subscription:
+            # Verify this checkout session belongs to the current user's customer
+            if (
+                session.customer
+                and current_user.stripe_customer_id
+                and session.customer == current_user.stripe_customer_id
+                and session.payment_status in ("paid", "no_payment_required")
+                and session.subscription
+            ):
                 current_user.stripe_subscription_id = session.subscription
                 current_user.plan = "pro"
                 db.session.commit()

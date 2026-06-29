@@ -1,3 +1,19 @@
+/* ─── CSRF helper ────────────────────────────────────────────── */
+function getCsrfToken() {
+  const meta = document.querySelector('meta[name="csrf-token"]');
+  return meta ? meta.getAttribute("content") : "";
+}
+function jsonPost(url, body) {
+  return fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-CSRFToken": getCsrfToken()
+    },
+    body: JSON.stringify(body)
+  });
+}
+
 /* ─── State ──────────────────────────────────────────────────── */
 let emails = [];
 let currentStep = 1;
@@ -59,7 +75,7 @@ function handleFile(file) {
   setExtractStatus("info", `Parsing ${file.name}…`);
   const fd = new FormData();
   fd.append("file", file);
-  fetch("/extract", { method: "POST", body: fd })
+  fetch("/extract", { method: "POST", body: fd, headers: { "X-CSRFToken": getCsrfToken() } })
     .then(r => r.json())
     .then(data => {
       if (data.error) { setExtractStatus("error", data.error); return; }
@@ -89,11 +105,7 @@ document.getElementById("scrape-btn").addEventListener("click", () => {
   const url = document.getElementById("url-input").value.trim();
   if (!url) return;
   setExtractStatus("info", "Scraping page…");
-  fetch("/extract-url", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url })
-  })
+  jsonPost("/extract-url", { url })
     .then(r => r.json())
     .then(data => {
       if (data.error) { setExtractStatus("error", data.error); return; }
@@ -135,11 +147,7 @@ if (IS_PRO) {
     genBtn.textContent = "Generating…";
     setGenStatus("info", "Asking AI to write your email…");
 
-    fetch("/generate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ brief })
-    })
+    jsonPost("/generate", { brief })
       .then(r => r.json())
       .then(data => {
         if (data.error) { setGenStatus("error", data.error); return; }
@@ -197,11 +205,7 @@ if (sendBtn) {
     let done = 0, ok = 0, fail = 0;
 
     try {
-      const resp = await fetch("/send-bulk", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ emails: list, subject, body, name })
-      });
+      const resp = await jsonPost("/send-bulk", { emails: list, subject, body, name });
 
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
