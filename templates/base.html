@@ -10,8 +10,7 @@
 <body class="app-layout">
   <aside class="sidebar">
     <div class="sidebar__brand">
-      <span class="sidebar__logo">✉️</span>
-      <span class="sidebar__name">MailBlast</span>
+      <span class="sidebar__name">Mail<span style="color:#000;">Blast</span></span>
     </div>
     <nav class="sidebar__nav">
       <a href="{{ url_for('dashboard') }}" class="nav-link {% if request.endpoint == 'dashboard' %}active{% endif %}">
