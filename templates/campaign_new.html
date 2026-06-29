@@ -5,7 +5,7 @@
 <div class="page-header">
   <div>
     <h1 class="page-title">New Campaign</h1>
-    <p class="page-sub">Extract emails, generate copy, and send</p>
+    <p class="page-sub">Extract emails, compose your message, and send</p>
   </div>
 </div>
 
@@ -31,7 +31,7 @@
 <div class="wizard-step" id="step-1">
   <div class="card">
     <h2 class="card-title">Extract Email Addresses</h2>
-    <p class="card-sub">Upload a CSV, Excel, or text file — or enter a webpage URL — and we'll find every email address.</p>
+    <p class="card-sub">Upload a CSV, Excel, PDF, Word, or text file — or enter a webpage URL — and we'll find every email address.</p>
 
     <div class="tab-bar" id="extract-tabs">
       <button class="tab active" data-tab="file">Upload File</button>
@@ -40,10 +40,10 @@
 
     <div id="tab-file">
       <div class="upload-zone" id="drop-zone">
-        <input type="file" id="file-input" accept=".csv,.xlsx,.xls,.txt,.text" hidden />
+        <input type="file" id="file-input" accept=".csv,.xlsx,.xls,.txt,.text,.pdf,.docx" hidden />
         <div class="upload-zone__icon">📂</div>
         <p>Drag & drop or <button type="button" class="btn-link" onclick="document.getElementById('file-input').click()">browse</button></p>
-        <p class="muted small">CSV, Excel (.xlsx), or plain text</p>
+        <p class="muted small">CSV, Excel (.xlsx), PDF, Word (.docx), or plain text</p>
       </div>
     </div>
 
@@ -62,9 +62,6 @@
     <div id="email-list-wrap" style="display:none">
       <div class="email-list-header">
         <strong id="email-count">0 emails found</strong>
-        {% if not current_user.is_pro %}
-        <span class="badge badge--orange">Free plan: first 50 only</span>
-        {% endif %}
         <button type="button" class="btn btn--sm btn--ghost" id="clear-emails-btn">Clear</button>
       </div>
       <div class="email-chips" id="email-chips"></div>
@@ -81,13 +78,8 @@
 <div class="wizard-step" id="step-2" style="display:none">
   <div class="card">
     <h2 class="card-title">Compose Your Email</h2>
-    {% if current_user.is_pro %}
     <p class="card-sub">Describe your campaign and let AI write it — or write your own.</p>
-    {% else %}
-    <p class="card-sub">Write your subject and body below. <a href="{{ url_for('pricing') }}">Upgrade to Pro</a> for AI generation.</p>
-    {% endif %}
 
-    {% if current_user.is_pro %}
     <div class="ai-box">
       <div class="field">
         <label for="brief-input">Campaign brief <span class="muted">(what are you promoting?)</span></label>
@@ -100,12 +92,6 @@
       <button type="button" class="btn btn--secondary" id="generate-btn">✨ Generate with AI</button>
       <div id="generate-status" class="status-msg hidden"></div>
     </div>
-    {% else %}
-    <div class="field">
-      <label for="campaign-name-manual">Campaign name</label>
-      <input type="text" id="campaign-name-manual" placeholder="My Campaign" />
-    </div>
-    {% endif %}
 
     <div class="field" style="margin-top:1.25rem">
       <label for="subject-input">Subject line</label>
@@ -114,6 +100,17 @@
     <div class="field">
       <label for="body-input">Email body</label>
       <textarea id="body-input" rows="10" placeholder="Write your email here…" required></textarea>
+    </div>
+
+    <!-- Attachments -->
+    <div class="field" style="margin-top:1.25rem">
+      <label>Attachments <span class="muted">(optional)</span></label>
+      <div class="attach-zone" id="attach-zone">
+        <input type="file" id="attach-input" multiple hidden />
+        <button type="button" class="btn btn--ghost btn--sm" id="attach-btn">📎 Add files</button>
+        <span class="muted small" style="margin-left:.5rem">Any file type, up to 32 MB total</span>
+      </div>
+      <div id="attach-list" class="attach-list"></div>
     </div>
 
     <div class="wizard-actions">
@@ -140,6 +137,10 @@
       <div class="review-item full">
         <span class="review-label">Preview</span>
         <pre class="review-body" id="review-body">—</pre>
+      </div>
+      <div class="review-item" id="review-attachments-item" style="display:none">
+        <span class="review-label">Attachments</span>
+        <span class="review-val" id="review-attachments">—</span>
       </div>
       <div class="review-item full">
         <span class="review-label">SMTP</span>
@@ -189,8 +190,8 @@
 
 {% block scripts %}
 <script>
-  const IS_PRO = {{ 'true' if current_user.is_pro else 'false' }};
-  const SEND_LIMIT = {{ current_user.send_limit if current_user.send_limit else 'null' }};
+  const IS_PRO = true;
+  const SEND_LIMIT = null;
 </script>
 <script src="/static/campaign.js"></script>
 {% endblock %}

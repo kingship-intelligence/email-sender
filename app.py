@@ -9,6 +9,9 @@ import socket
 from datetime import datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
+from functools import wraps
 from urllib.parse import urlparse
 
 from flask import (
@@ -45,7 +48,7 @@ app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get(
 ).replace("postgres://", "postgresql://")
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["WTF_CSRF_TIME_LIMIT"] = None
-app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16 MB upload limit
+app.config["MAX_CONTENT_LENGTH"] = 32 * 1024 * 1024  # 32 MB upload limit
 
 # ── Server-side sessions ──────────────────────────────────────────────────────
 app.config["SESSION_TYPE"] = "filesystem"
@@ -117,6 +120,17 @@ def get_domain():
     return request.host_url.rstrip("/")
 
 
+# ── Subscription guard ────────────────────────────────────────────────────────
+def subscription_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not current_user.is_pro:
+            flash("An active subscription is required. Subscribe below to get started.", "error")
+            return redirect(url_for("pricing"))
+        return f(*args, **kwargs)
+    return decorated
+
+
 # ── Auth Routes ───────────────────────────────────────────────────────────────
 @app.route("/")
 def index():
@@ -162,8 +176,8 @@ def register():
             db.session.add(user)
             db.session.commit()
             login_user(user)
-            flash("Welcome to MailBlast!", "success")
-            return redirect(url_for("dashboard"))
+            flash("Account created! Subscribe below to get started.", "success")
+            return redirect(url_for("pricing"))
     return render_template("register.html")
 
 
@@ -177,6 +191,7 @@ def logout():
 # ── Dashboard ─────────────────────────────────────────────────────────────────
 @app.route("/dashboard")
 @login_required
+@subscription_required
 def dashboard():
     campaigns = (
         Campaign.query
@@ -190,12 +205,14 @@ def dashboard():
 # ── Campaign ──────────────────────────────────────────────────────────────────
 @app.route("/campaign/new")
 @login_required
+@subscription_required
 def campaign_new():
     return render_template("campaign_new.html")
 
 
 @app.route("/campaign/<int:campaign_id>")
 @login_required
+@subscription_required
 def campaign_detail(campaign_id):
     campaign = Campaign.query.filter_by(id=campaign_id, user_id=current_user.id).first_or_404()
     recipients = CampaignRecipient.query.filter_by(campaign_id=campaign.id).all()
@@ -204,6 +221,7 @@ def campaign_detail(campaign_id):
 
 @app.route("/extract", methods=["POST"])
 @login_required
+@subscription_required
 def extract():
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded."}), 400
@@ -219,12 +237,42 @@ def extract():
                     for cell in row:
                         if cell.value:
                             text += str(cell.value) + " "
+
+        elif filename.endswith(".csv"):
+            raw = f.read()
+            try:
+                decoded = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                decoded = raw.decode("latin-1")
+            reader = csv.reader(io.StringIO(decoded))
+            for row in reader:
+                text += " ".join(row) + " "
+
+        elif filename.endswith(".pdf"):
+            import pdfplumber
+            with pdfplumber.open(f) as pdf:
+                for page in pdf.pages:
+                    page_text = page.extract_text()
+                    if page_text:
+                        text += page_text + " "
+
+        elif filename.endswith(".docx"):
+            from docx import Document
+            doc = Document(f)
+            for para in doc.paragraphs:
+                text += para.text + " "
+            for table in doc.tables:
+                for row in table.rows:
+                    for cell in row.cells:
+                        text += cell.text + " "
+
         else:
             raw = f.read()
             try:
                 text = raw.decode("utf-8")
             except UnicodeDecodeError:
                 text = raw.decode("latin-1")
+
     except Exception as e:
         return jsonify({"error": f"Could not parse file: {e}"}), 400
 
@@ -280,7 +328,6 @@ def _safe_fetch(url: str, max_redirects: int = 5) -> "req_lib.Response":
             location = resp.headers.get("Location", "")
             if not location:
                 break
-            # Resolve relative redirects
             if location.startswith("/"):
                 parsed = urlparse(url)
                 url = f"{parsed.scheme}://{parsed.netloc}{location}"
@@ -294,6 +341,7 @@ def _safe_fetch(url: str, max_redirects: int = 5) -> "req_lib.Response":
 
 @app.route("/extract-url", methods=["POST"])
 @login_required
+@subscription_required
 def extract_url():
     data = request.get_json()
     url = (data or {}).get("url", "").strip()
@@ -318,9 +366,8 @@ def extract_url():
 
 @app.route("/generate", methods=["POST"])
 @login_required
+@subscription_required
 def generate():
-    if not current_user.is_pro:
-        return jsonify({"error": "AI generation requires a Pro plan."}), 403
     if not OPENAI_API_KEY:
         return jsonify({"error": "OpenAI is not configured. Contact support."}), 503
 
@@ -361,12 +408,18 @@ def generate():
 
 @app.route("/send-bulk", methods=["POST"])
 @login_required
+@subscription_required
 def send_bulk():
-    data = request.get_json()
-    emails = (data or {}).get("emails", [])
-    subject = (data or {}).get("subject", "").strip()
-    body = (data or {}).get("body", "").strip()
-    campaign_name = (data or {}).get("name", "Campaign").strip() or "Campaign"
+    # Accept multipart/form-data (with optional file attachments)
+    emails_raw = request.form.get("emails", "[]")
+    subject = request.form.get("subject", "").strip()
+    body = request.form.get("body", "").strip()
+    campaign_name = (request.form.get("name", "Campaign") or "Campaign").strip()
+
+    try:
+        emails = json.loads(emails_raw)
+    except Exception:
+        return jsonify({"error": "Invalid emails payload."}), 400
 
     if not emails or not subject or not body:
         return jsonify({"error": "emails, subject, and body are required."}), 400
@@ -374,9 +427,13 @@ def send_bulk():
     if not current_user.smtp_host:
         return jsonify({"error": "SMTP is not configured. Go to Settings."}), 400
 
-    # Enforce free tier limit
-    if not current_user.is_pro and len(emails) > 50:
-        emails = emails[:50]
+    # Read uploaded attachments into memory
+    attachment_files = request.files.getlist("attachments")
+    attachments = []
+    for att_file in attachment_files:
+        if att_file and att_file.filename:
+            att_data = att_file.read()
+            attachments.append((att_file.filename, att_data, att_file.mimetype or "application/octet-stream"))
 
     smtp_host = current_user.smtp_host
     smtp_port = current_user.smtp_port
@@ -416,7 +473,6 @@ def send_bulk():
                 server = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=10)
             server.login(smtp_user, smtp_pass)
         except Exception as e:
-            # Fail all recipients if connection fails
             for r in recipients:
                 r.status = "failed"
                 r.error = str(e)
@@ -431,11 +487,20 @@ def send_bulk():
 
         for r in recipients:
             try:
-                msg = MIMEMultipart("alternative")
+                msg = MIMEMultipart("mixed")
                 msg["From"] = from_addr
                 msg["To"] = r.email
                 msg["Subject"] = subject
                 msg.attach(MIMEText(body, "plain"))
+
+                for att_name, att_data, att_mime in attachments:
+                    maintype, subtype = att_mime.split("/", 1) if "/" in att_mime else ("application", "octet-stream")
+                    part = MIMEBase(maintype, subtype)
+                    part.set_payload(att_data)
+                    encoders.encode_base64(part)
+                    part.add_header("Content-Disposition", "attachment", filename=att_name)
+                    msg.attach(part)
+
                 server.sendmail(from_addr, r.email, msg.as_string())
                 r.status = "sent"
                 r.sent_at = datetime.utcnow()
@@ -465,6 +530,7 @@ def send_bulk():
 # ── Settings ──────────────────────────────────────────────────────────────────
 @app.route("/settings", methods=["GET", "POST"])
 @login_required
+@subscription_required
 def settings():
     if request.method == "POST":
         current_user.smtp_host = request.form.get("smtp_host", "").strip() or None
@@ -499,7 +565,6 @@ def subscribe():
         return redirect(url_for("pricing"))
 
     try:
-        # Create or retrieve Stripe customer
         if not current_user.stripe_customer_id:
             customer = stripe.Customer.create(email=current_user.email)
             current_user.stripe_customer_id = customer.id
@@ -527,7 +592,6 @@ def subscribe_success():
     if session_id and STRIPE_ENABLED:
         try:
             session = stripe.checkout.Session.retrieve(session_id)
-            # Verify this checkout session belongs to the current user's customer
             if (
                 session.customer
                 and current_user.stripe_customer_id
@@ -540,7 +604,7 @@ def subscribe_success():
                 db.session.commit()
         except Exception:
             pass
-    flash("Welcome to Pro! Your account has been upgraded.", "success")
+    flash("Welcome to MailBlast Pro! Your account is now active.", "success")
     return redirect(url_for("dashboard"))
 
 
@@ -593,6 +657,20 @@ def stripe_webhook():
             db.session.commit()
 
     return jsonify({"received": True})
+
+
+# ── Help ──────────────────────────────────────────────────────────────────────
+@app.route("/help")
+@login_required
+def help_page():
+    return render_template("help.html")
+
+
+# ── Tutorial ──────────────────────────────────────────────────────────────────
+@app.route("/tutorial")
+@login_required
+def tutorial():
+    return render_template("tutorial.html")
 
 
 # ── Init ──────────────────────────────────────────────────────────────────────

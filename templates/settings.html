@@ -55,18 +55,13 @@
 
   <!-- Account / Plan -->
   <div class="card">
-    <h2 class="card-title">Your Plan</h2>
+    <h2 class="card-title">Your Subscription</h2>
     <div class="plan-info">
       <div class="plan-current plan-current--{{ current_user.plan }}">
-        <strong>{{ current_user.plan | title }} Plan</strong>
-        {% if current_user.plan == 'free' %}
-          <p>Up to 50 recipients per campaign. No AI generation.</p>
-          <a href="{{ url_for('pricing') }}" class="btn btn--primary" style="margin-top:.75rem">Upgrade to Pro</a>
-        {% else %}
-          <p>Unlimited recipients. AI-powered email generation included.</p>
-          {% if stripe_enabled %}
-          <a href="{{ url_for('billing_portal') }}" class="btn btn--ghost" style="margin-top:.75rem">Manage Billing</a>
-          {% endif %}
+        <strong>Pro Plan — $5/month</strong>
+        <p>Unlimited recipients, AI email generation, attachments, and all features included.</p>
+        {% if stripe_enabled %}
+        <a href="{{ url_for('billing_portal') }}" class="btn btn--ghost" style="margin-top:.75rem">Manage Billing</a>
         {% endif %}
       </div>
     </div>

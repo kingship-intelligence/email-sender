@@ -1,51 +1,44 @@
 {% extends "base.html" %}
-{% block title %}Pricing{% endblock %}
+{% block title %}Billing{% endblock %}
 
 {% block content %}
 <div class="page-header">
   <div>
-    <h1 class="page-title">Pricing</h1>
-    <p class="page-sub">Simple, transparent plans</p>
+    <h1 class="page-title">Billing</h1>
+    <p class="page-sub">MailBlast requires an active subscription to use</p>
   </div>
 </div>
 
-<div class="pricing-grid">
-  <!-- Free -->
-  <div class="pricing-card {% if current_user.plan == 'free' %}pricing-card--current{% endif %}">
-    <div class="pricing-tier">Free</div>
-    <div class="pricing-price">$0<span>/month</span></div>
-    <ul class="pricing-features">
-      <li><span class="feat-yes"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></span> Upload CSV, Excel, TXT files</li>
-      <li><span class="feat-yes"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></span> Webpage email scraping</li>
-      <li><span class="feat-yes"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></span> Regex email extraction</li>
-      <li><span class="feat-yes"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></span> Up to 50 recipients per campaign</li>
-      <li><span class="feat-no"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span> AI email generation</li>
-      <li><span class="feat-no"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span> Unlimited recipients</li>
-    </ul>
-    {% if current_user.plan == 'free' %}
-    <div class="btn btn--ghost btn--full" style="text-align:center;padding:.65rem">Current Plan</div>
-    {% endif %}
-  </div>
+{% if not current_user.is_pro %}
+<div class="notice notice--warn">
+  <strong>Subscription required.</strong> Subscribe below to unlock all features — email extraction, campaign sending, AI generation, and more.
+</div>
+{% endif %}
 
-  <!-- Pro -->
-  <div class="pricing-card pricing-card--pro {% if current_user.plan == 'pro' %}pricing-card--current{% endif %}">
-    <div class="pricing-badge">Most Popular</div>
-    <div class="pricing-tier">Pro</div>
-    <div class="pricing-price">$19<span>/month</span></div>
+<div class="pricing-grid" style="max-width:400px">
+  <div class="pricing-card pricing-card--pro {% if current_user.is_pro %}pricing-card--current{% endif %}">
+    {% if not current_user.is_pro %}<div class="pricing-badge">Get Started</div>{% endif %}
+    <div class="pricing-tier">Pro Plan</div>
+    <div class="pricing-price">$5<span>/month</span></div>
     <ul class="pricing-features">
-      <li><span class="feat-yes"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></span> Everything in Free</li>
-      <li><span class="feat-yes"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></span> <strong>Unlimited recipients</strong></li>
+      <li><span class="feat-yes"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></span> Upload CSV, Excel, PDF, Word, TXT files</li>
+      <li><span class="feat-yes"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></span> Webpage email scraping</li>
+      <li><span class="feat-yes"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></span> <strong>Unlimited recipients</strong> per campaign</li>
+      <li><span class="feat-yes"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></span> <strong>Email attachments</strong></li>
       <li><span class="feat-yes"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></span> <strong>AI email generation</strong> (GPT-4o-mini)</li>
       <li><span class="feat-yes"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></span> Campaign history &amp; analytics</li>
       <li><span class="feat-yes"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></span> Encrypted SMTP storage</li>
       <li><span class="feat-yes"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></span> Priority support</li>
     </ul>
-    {% if current_user.plan == 'pro' %}
-    <div class="btn btn--ghost btn--full" style="text-align:center;padding:.65rem">Current Plan</div>
+    {% if current_user.is_pro %}
+      <div class="btn btn--ghost btn--full" style="text-align:center;padding:.65rem">✓ Active Subscription</div>
+      {% if stripe_enabled %}
+      <a href="{{ url_for('billing_portal') }}" class="btn btn--ghost btn--full" style="margin-top:.75rem">Manage Billing</a>
+      {% endif %}
     {% elif stripe_enabled %}
-    <a href="{{ url_for('subscribe') }}" class="btn btn--primary btn--full">Upgrade to Pro</a>
+      <a href="{{ url_for('subscribe') }}" class="btn btn--primary btn--full">Subscribe — $5/month</a>
     {% else %}
-    <div class="btn btn--ghost btn--full" style="text-align:center;padding:.65rem;cursor:default">Payments coming soon</div>
+      <div class="btn btn--ghost btn--full" style="text-align:center;padding:.65rem;cursor:default">Payments coming soon</div>
     {% endif %}
   </div>
 </div>

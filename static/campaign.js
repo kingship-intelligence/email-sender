@@ -17,6 +17,7 @@ function jsonPost(url, body) {
 /* ─── State ──────────────────────────────────────────────────── */
 let emails = [];
 let currentStep = 1;
+let attachmentFiles = [];
 
 /* ─── Step navigation ────────────────────────────────────────── */
 function goToStep(n) {
@@ -38,11 +39,8 @@ function renderChips() {
   const nextBtn   = document.getElementById("step1-next");
 
   container.innerHTML = "";
-  const display = (SEND_LIMIT && emails.length > SEND_LIMIT)
-    ? emails.slice(0, SEND_LIMIT)
-    : emails;
 
-  display.forEach((email, idx) => {
+  emails.forEach((email, idx) => {
     const chip = document.createElement("div");
     chip.className = "chip";
     chip.innerHTML = `<span>${email}</span><button class="chip__remove" data-idx="${idx}" title="Remove">×</button>`;
@@ -57,10 +55,10 @@ function renderChips() {
     });
   });
 
-  const shown = display.length;
-  countEl.textContent = `${shown} email${shown !== 1 ? "s" : ""} found${emails.length > shown ? ` (showing first ${shown})` : ""}`;
-  listWrap.style.display = emails.length > 0 ? "" : "none";
-  nextBtn.disabled = emails.length === 0;
+  const cnt = emails.length;
+  countEl.textContent = `${cnt} email${cnt !== 1 ? "s" : ""} found`;
+  listWrap.style.display = cnt > 0 ? "" : "none";
+  nextBtn.disabled = cnt === 0;
 }
 
 function setExtractStatus(type, msg) {
@@ -69,7 +67,7 @@ function setExtractStatus(type, msg) {
   el.textContent = msg;
 }
 
-/* ─── File upload ─────────────────────────────────────────────── */
+/* ─── File upload (email extraction) ─────────────────────────── */
 function handleFile(file) {
   if (!file) return;
   setExtractStatus("info", `Parsing ${file.name}…`);
@@ -138,9 +136,9 @@ document.getElementById("step1-next").addEventListener("click", () => goToStep(2
 document.getElementById("step2-back").addEventListener("click", () => goToStep(1));
 
 /* ─── AI generation ───────────────────────────────────────────── */
-if (IS_PRO) {
-  const genBtn = document.getElementById("generate-btn");
-  genBtn && genBtn.addEventListener("click", () => {
+const genBtn = document.getElementById("generate-btn");
+if (genBtn) {
+  genBtn.addEventListener("click", () => {
     const brief = document.getElementById("brief-input").value.trim();
     if (!brief) { setGenStatus("error", "Please enter a campaign brief."); return; }
     genBtn.disabled = true;
@@ -167,6 +165,40 @@ function setGenStatus(type, msg) {
   el.textContent = msg;
 }
 
+/* ─── Attachments ─────────────────────────────────────────────── */
+const attachInput = document.getElementById("attach-input");
+const attachBtn   = document.getElementById("attach-btn");
+
+attachBtn.addEventListener("click", () => attachInput.click());
+
+attachInput.addEventListener("change", () => {
+  Array.from(attachInput.files).forEach(f => {
+    if (!attachmentFiles.find(x => x.name === f.name && x.size === f.size)) {
+      attachmentFiles.push(f);
+    }
+  });
+  attachInput.value = "";
+  renderAttachments();
+});
+
+function renderAttachments() {
+  const list = document.getElementById("attach-list");
+  list.innerHTML = "";
+  attachmentFiles.forEach((f, idx) => {
+    const item = document.createElement("div");
+    item.className = "attach-item";
+    const sizeKb = (f.size / 1024).toFixed(0);
+    item.innerHTML = `<span class="attach-name">📎 ${f.name}</span><span class="attach-size muted small">${sizeKb} KB</span><button class="attach-remove" data-idx="${idx}" title="Remove">✕</button>`;
+    list.appendChild(item);
+  });
+  list.querySelectorAll(".attach-remove").forEach(btn => {
+    btn.addEventListener("click", () => {
+      attachmentFiles.splice(parseInt(btn.dataset.idx), 1);
+      renderAttachments();
+    });
+  });
+}
+
 /* ─── Step 2 → 3 ──────────────────────────────────────────────── */
 document.getElementById("step2-next").addEventListener("click", () => {
   const subject = document.getElementById("subject-input").value.trim();
@@ -175,10 +207,18 @@ document.getElementById("step2-next").addEventListener("click", () => {
     alert("Please fill in the subject and body.");
     return;
   }
-  const cnt = SEND_LIMIT ? Math.min(emails.length, SEND_LIMIT) : emails.length;
-  document.getElementById("review-count").textContent   = cnt + " recipient" + (cnt !== 1 ? "s" : "");
+  document.getElementById("review-count").textContent   = emails.length + " recipient" + (emails.length !== 1 ? "s" : "");
   document.getElementById("review-subject").textContent = subject;
   document.getElementById("review-body").textContent    = body;
+
+  const attItem = document.getElementById("review-attachments-item");
+  if (attachmentFiles.length > 0) {
+    document.getElementById("review-attachments").textContent = attachmentFiles.map(f => f.name).join(", ");
+    attItem.style.display = "";
+  } else {
+    attItem.style.display = "none";
+  }
+
   goToStep(3);
 });
 
@@ -192,7 +232,6 @@ if (sendBtn) {
     const body    = document.getElementById("body-input").value.trim();
     const nameEl  = document.getElementById("campaign-name-ai") || document.getElementById("campaign-name-manual");
     const name    = (nameEl ? nameEl.value.trim() : "") || "Campaign";
-    const list    = SEND_LIMIT ? emails.slice(0, SEND_LIMIT) : emails;
 
     sendBtn.disabled = true;
     document.getElementById("step3-actions").style.display = "none";
@@ -201,11 +240,22 @@ if (sendBtn) {
     const bar   = document.getElementById("progress-bar");
     const label = document.getElementById("progress-label");
     const log   = document.getElementById("send-log");
-    const total = list.length;
+    const total = emails.length;
     let done = 0, ok = 0, fail = 0;
 
     try {
-      const resp = await jsonPost("/send-bulk", { emails: list, subject, body, name });
+      const fd = new FormData();
+      fd.append("emails", JSON.stringify(emails));
+      fd.append("subject", subject);
+      fd.append("body", body);
+      fd.append("name", name);
+      attachmentFiles.forEach(f => fd.append("attachments", f));
+
+      const resp = await fetch("/send-bulk", {
+        method: "POST",
+        headers: { "X-CSRFToken": getCsrfToken() },
+        body: fd
+      });
 
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();

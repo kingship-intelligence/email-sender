@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Help{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Help &amp; Support</h1>
+    <p class="page-sub">Frequently asked questions and contact information</p>
+  </div>
+</div>
+
+<div class="settings-grid">
+
+  <!-- FAQ -->
+  <div class="card">
+    <h2 class="card-title">Frequently Asked Questions</h2>
+
+    <div class="faq-list">
+
+      <div class="faq-item">
+        <h3 class="faq-q">How do I set up SMTP to send emails?</h3>
+        <p class="faq-a">Go to <a href="{{ url_for('settings') }}">Settings</a> and fill in your SMTP host, port, username, and password. For Gmail, use <code>smtp.gmail.com</code> on port 587 with STARTTLS enabled, and an App Password (not your regular Gmail password). See the <a href="{{ url_for('tutorial') }}">Tutorial</a> for a full walkthrough.</p>
+      </div>
+
+      <div class="faq-item">
+        <h3 class="faq-q">What file types can I upload to extract emails?</h3>
+        <p class="faq-a">MailBlast supports CSV, Excel (.xlsx/.xls), PDF, Word (.docx), and plain text files. The extractor scans every cell, paragraph, and page for valid email addresses.</p>
+      </div>
+
+      <div class="faq-item">
+        <h3 class="faq-q">How do I attach files to a campaign email?</h3>
+        <p class="faq-a">In Step 2 (Compose Email), click <strong>Add files</strong> under the Attachments section. You can add multiple files of any type. They will be attached to every email sent in that campaign.</p>
+      </div>
+
+      <div class="faq-item">
+        <h3 class="faq-q">Why is the AI generation button not available?</h3>
+        <p class="faq-a">AI generation requires an active Pro subscription and OpenAI to be configured on the server. If you have an active subscription and still see an error, contact support below.</p>
+      </div>
+
+      <div class="faq-item">
+        <h3 class="faq-q">How do I cancel or manage my subscription?</h3>
+        <p class="faq-a">Go to <a href="{{ url_for('settings') }}">Settings</a> and click <strong>Manage Billing</strong> to access the Stripe billing portal where you can update your payment method or cancel.</p>
+      </div>
+
+      <div class="faq-item">
+        <h3 class="faq-q">My emails are going to spam — what can I do?</h3>
+        <p class="faq-a">Make sure your domain has SPF, DKIM, and DMARC DNS records configured. Use a reputable SMTP provider. Avoid spam trigger words in your subject and body. Send to engaged recipients only.</p>
+      </div>
+
+      <div class="faq-item">
+        <h3 class="faq-q">Is my SMTP password stored securely?</h3>
+        <p class="faq-a">Yes. Your SMTP password is encrypted with AES-256 (via Fernet) before being stored in the database. It is never returned to the browser.</p>
+      </div>
+
+      <div class="faq-item">
+        <h3 class="faq-q">How many emails can I send per campaign?</h3>
+        <p class="faq-a">There is no limit imposed by MailBlast — you can send to as many recipients as you like. Your SMTP provider may have its own daily or hourly rate limits.</p>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Contact -->
+  <div class="card">
+    <h2 class="card-title">Contact Support</h2>
+    <p class="card-sub">Can't find an answer? We're happy to help.</p>
+
+    <div class="contact-box">
+      <p>Send us an email and we'll get back to you within one business day:</p>
+      <a href="mailto:kingshipintelligence@gmail.com?subject=MailBlast Support Request" class="btn btn--primary" style="margin-top:1rem;display:inline-flex">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" style="margin-right:.4rem"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+        Email Support
+      </a>
+      <p class="muted small" style="margin-top:.75rem">kingshipintelligence@gmail.com</p>
+    </div>
+
+    <div style="margin-top:1.5rem;padding-top:1.5rem;border-top:1px solid var(--gray-100)">
+      <p class="card-sub">You can also check the <a href="{{ url_for('tutorial') }}">Tutorial</a> for step-by-step guides on using every feature.</p>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
