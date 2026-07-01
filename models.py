@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import UserMixin
 
@@ -62,3 +62,25 @@ class CampaignRecipient(db.Model):
     status = db.Column(db.String(20), default="pending")
     error = db.Column(db.Text)
     sent_at = db.Column(db.DateTime)
+
+
+class ScheduledCampaign(db.Model):
+    __tablename__ = "scheduled_campaigns"
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    name = db.Column(db.String(255), nullable=False)
+    subject = db.Column(db.String(500), nullable=False)
+    body = db.Column(db.Text, nullable=False)
+    emails_json = db.Column(db.Text, nullable=False)
+    next_run_at = db.Column(db.DateTime, nullable=False)
+    last_run_at = db.Column(db.DateTime)
+    active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    user = db.relationship("User", backref=db.backref("scheduled_campaigns", lazy=True, cascade="all, delete-orphan"))
+
+    @property
+    def emails(self):
+        import json
+        return json.loads(self.emails_json or "[]")

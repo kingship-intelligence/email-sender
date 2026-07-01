@@ -612,3 +612,23 @@ textarea { resize: vertical; }
 .muted { color: var(--gray-400); }
 .small { font-size: .8rem; }
 a { color: var(--orange); }
+
+/* ── Two-column layout ───────────────────────────────────────── */
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; align-items: start; }
+@media (max-width: 860px) { .two-col { grid-template-columns: 1fr; } }
+
+/* ── Scheduled campaign cards ────────────────────────────────── */
+.sched-card { background: #fff; border: 1px solid var(--gray-200); border-radius: var(--radius); padding: 1.1rem 1.25rem; margin-bottom: 1rem; }
+.sched-card--paused { opacity: .65; }
+.sched-card__header { display: flex; justify-content: space-between; align-items: flex-start; gap: .75rem; margin-bottom: .75rem; }
+.sched-card__name { font-weight: 700; font-size: .95rem; color: var(--dark); }
+.sched-card__meta { display: flex; flex-wrap: wrap; gap: .75rem 1.5rem; font-size: .82rem; margin-bottom: .9rem; }
+.sched-card__actions { display: flex; gap: .5rem; }
+
+/* ── Extra badges / buttons ──────────────────────────────────── */
+.badge--gray { background: var(--gray-100); color: var(--gray-600); border: 1px solid var(--gray-200); }
+.btn--danger { background: #fee2e2; color: #b91c1c; border: 1px solid #fca5a5; }
+.btn--danger:hover { background: #fca5a5; }
+
+/* ── Form field hint ─────────────────────────────────────────── */
+.field__hint { font-size: .78rem; color: var(--gray-400); margin-top: .3rem; }

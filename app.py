@@ -6,7 +6,7 @@ import base64
 import smtplib
 import ipaddress
 import socket
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
@@ -23,6 +23,7 @@ from flask_bcrypt import Bcrypt
 from flask_wtf.csrf import CSRFProtect
 from flask_session import Session
 from cryptography.fernet import Fernet
+from apscheduler.schedulers.background import BackgroundScheduler
 
 import stripe
 import requests as req_lib
@@ -31,7 +32,7 @@ import openpyxl
 import csv
 import io
 
-from models import db, User, Campaign, CampaignRecipient
+from models import db, User, Campaign, CampaignRecipient, ScheduledCampaign
 
 app = Flask(__name__)
 
@@ -677,6 +678,172 @@ def stripe_webhook():
     return jsonify({"received": True})
 
 
+# ── Scheduled campaigns ───────────────────────────────────────────────────────
+def _fire_scheduled_campaign(sc_id: int, smtp_cfg: dict):
+    """Send one scheduled campaign run. Called from the scheduler background thread."""
+    with app.app_context():
+        sc = ScheduledCampaign.query.get(sc_id)
+        if not sc:
+            return
+        emails = sc.emails
+        subject = sc.subject
+        body = sc.body
+        from_addr = smtp_cfg["from"] or smtp_cfg["user"]
+        ok = fail = 0
+        server = None
+        try:
+            if smtp_cfg["use_tls"]:
+                server = smtplib.SMTP(smtp_cfg["host"], smtp_cfg["port"], timeout=20)
+                server.ehlo()
+                server.starttls()
+            else:
+                server = smtplib.SMTP_SSL(smtp_cfg["host"], smtp_cfg["port"], timeout=20)
+            server.login(smtp_cfg["user"], smtp_cfg["pass"])
+            for addr in emails:
+                try:
+                    msg = MIMEMultipart("mixed")
+                    msg["From"] = from_addr
+                    msg["To"] = addr
+                    msg["Subject"] = subject
+                    msg.attach(MIMEText(body, "plain"))
+                    server.sendmail(from_addr, addr, msg.as_string())
+                    ok += 1
+                except Exception:
+                    fail += 1
+            server.quit()
+        except Exception:
+            fail += len(emails)
+        # Record as a Campaign for history
+        c = Campaign(
+            user_id=sc.user_id,
+            name=f"[Scheduled] {sc.name}",
+            subject=subject,
+            body=body,
+            total=len(emails),
+            sent_ok=ok,
+            sent_fail=fail,
+            status="completed",
+        )
+        db.session.add(c)
+        db.session.commit()
+
+
+def run_scheduled_campaigns():
+    """Checked every minute by APScheduler. Fires any due campaigns."""
+    with app.app_context():
+        now = datetime.utcnow()
+        due = ScheduledCampaign.query.filter(
+            ScheduledCampaign.active == True,
+            ScheduledCampaign.next_run_at <= now,
+        ).all()
+        for sc in due:
+            old_next = sc.next_run_at
+            # Optimistic lock: only one worker proceeds if next_run_at still matches
+            updated = db.session.execute(
+                db.update(ScheduledCampaign)
+                .where(
+                    ScheduledCampaign.id == sc.id,
+                    ScheduledCampaign.next_run_at == old_next,
+                )
+                .values(
+                    next_run_at=old_next + timedelta(weeks=1),
+                    last_run_at=now,
+                )
+            )
+            db.session.commit()
+            if updated.rowcount == 0:
+                continue  # Another worker already claimed this run
+            user = User.query.get(sc.user_id)
+            if not user or not user.smtp_host or not user.smtp_pass_enc:
+                continue
+            smtp_cfg = {
+                "host": user.smtp_host,
+                "port": user.smtp_port,
+                "user": user.smtp_user,
+                "pass": decrypt_password(user.smtp_pass_enc),
+                "use_tls": user.smtp_use_tls,
+                "from": user.smtp_from,
+            }
+            _fire_scheduled_campaign(sc.id, smtp_cfg)
+
+
+@app.route("/scheduled", methods=["GET", "POST"])
+@login_required
+@subscription_required
+def scheduled():
+    if request.method == "POST":
+        name = request.form.get("name", "").strip()
+        subject = request.form.get("subject", "").strip()
+        body = request.form.get("body", "").strip()
+        emails_raw = request.form.get("emails", "").strip()
+        first_run = request.form.get("first_run", "").strip()
+
+        errors = []
+        if not name:
+            errors.append("Campaign name is required.")
+        if not subject:
+            errors.append("Subject is required.")
+        if not body:
+            errors.append("Body is required.")
+
+        emails_list = [e.strip().lower() for e in emails_raw.splitlines() if e.strip()]
+        emails_list = list(dict.fromkeys(emails_list))  # deduplicate
+        if not emails_list:
+            errors.append("At least one email address is required.")
+
+        next_run_at = None
+        if not first_run:
+            errors.append("First send date/time is required.")
+        else:
+            try:
+                next_run_at = datetime.strptime(first_run, "%Y-%m-%dT%H:%M")
+            except ValueError:
+                errors.append("Invalid date/time format.")
+
+        if errors:
+            for e in errors:
+                flash(e, "error")
+        else:
+            sc = ScheduledCampaign(
+                user_id=current_user.id,
+                name=name,
+                subject=subject,
+                body=body,
+                emails_json=json.dumps(emails_list),
+                next_run_at=next_run_at,
+            )
+            db.session.add(sc)
+            db.session.commit()
+            flash(f'Weekly schedule "{name}" created — first send on {next_run_at.strftime("%b %d, %Y at %H:%M")} UTC.', "success")
+        return redirect(url_for("scheduled"))
+
+    schedules = ScheduledCampaign.query.filter_by(user_id=current_user.id).order_by(ScheduledCampaign.created_at.desc()).all()
+    return render_template("scheduled.html", schedules=schedules)
+
+
+@app.route("/scheduled/<int:sc_id>/toggle", methods=["POST"])
+@login_required
+@subscription_required
+def scheduled_toggle(sc_id):
+    sc = ScheduledCampaign.query.filter_by(id=sc_id, user_id=current_user.id).first_or_404()
+    sc.active = not sc.active
+    db.session.commit()
+    state = "resumed" if sc.active else "paused"
+    flash(f'Schedule "{sc.name}" {state}.', "success")
+    return redirect(url_for("scheduled"))
+
+
+@app.route("/scheduled/<int:sc_id>/delete", methods=["POST"])
+@login_required
+@subscription_required
+def scheduled_delete(sc_id):
+    sc = ScheduledCampaign.query.filter_by(id=sc_id, user_id=current_user.id).first_or_404()
+    db.session.delete(sc)
+    db.session.commit()
+    flash(f'Schedule "{sc.name}" deleted.', "success")
+    return redirect(url_for("scheduled"))
+
+
 # ── Help ──────────────────────────────────────────────────────────────────────
 @app.route("/help")
 @login_required
@@ -694,6 +861,12 @@ def tutorial():
 # ── Init ──────────────────────────────────────────────────────────────────────
 with app.app_context():
     db.create_all()
+
+# Start background scheduler (only in the reloader child in dev; always in prod)
+if os.environ.get("WERKZEUG_RUN_MAIN") == "true" or not app.debug:
+    _scheduler = BackgroundScheduler(daemon=True)
+    _scheduler.add_job(run_scheduled_campaigns, "interval", minutes=1, max_instances=1)
+    _scheduler.start()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
