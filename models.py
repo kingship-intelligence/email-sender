@@ -76,6 +76,7 @@ class ScheduledCampaign(db.Model):
     next_run_at = db.Column(db.DateTime, nullable=False)
     last_run_at = db.Column(db.DateTime)
     active = db.Column(db.Boolean, default=True)
+    frequency = db.Column(db.String(20), default="weekly", nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     user = db.relationship("User", backref=db.backref("scheduled_campaigns", lazy=True, cascade="all, delete-orphan"))

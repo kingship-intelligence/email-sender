@@ -38,9 +38,19 @@
       </div>
 
       <div class="field">
+        <label class="field__label">Frequency</label>
+        <select name="frequency" class="input">
+          <option value="once">Once</option>
+          <option value="daily">Daily</option>
+          <option value="weekly" selected>Weekly</option>
+          <option value="monthly">Monthly</option>
+        </select>
+      </div>
+
+      <div class="field">
         <label class="field__label">First Send (UTC)</label>
         <input type="datetime-local" name="first_run" class="input" required />
-        <p class="field__hint">Repeats every 7 days from this date/time.</p>
+        <p class="field__hint">Repeats at the chosen frequency starting from this date/time.</p>
       </div>
 
       <button type="submit" class="btn btn--primary btn--full">Create Schedule</button>
@@ -63,6 +73,10 @@
         </div>
 
         <div class="sched-card__meta">
+          <div>
+            <span class="muted">Frequency:</span>
+            <strong>{{ sc.frequency | capitalize }}</strong>
+          </div>
           <div>
             <span class="muted">Recipients:</span>
             <strong>{{ sc.emails | length }}</strong>

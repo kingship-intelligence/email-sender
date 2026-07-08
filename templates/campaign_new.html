@@ -164,6 +164,32 @@
       </div>
     </div>
 
+    <div class="field field--check schedule-toggle" id="schedule-toggle-wrap" style="margin-top:1.25rem">
+      <label>
+        <input type="checkbox" id="schedule-checkbox" />
+        Send this on a schedule instead of right now
+      </label>
+    </div>
+
+    <div class="two-col schedule-options" id="schedule-options" style="display:none; margin-top:.75rem">
+      <div class="field">
+        <label for="schedule-frequency">Frequency</label>
+        <select id="schedule-frequency" class="input">
+          <option value="once">Once</option>
+          <option value="daily">Daily</option>
+          <option value="weekly" selected>Weekly</option>
+          <option value="monthly">Monthly</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="schedule-first-run">First send (UTC)</label>
+        <input type="datetime-local" id="schedule-first-run" class="input" />
+      </div>
+      <p class="field__hint" id="schedule-attachments-hint" style="display:none">
+        Attachments aren't supported on scheduled campaigns yet — they'll be left off this send.
+      </p>
+    </div>
+
     <div id="send-progress" style="display:none">
       <div class="progress-bar-wrap">
         <div class="progress-bar" id="progress-bar" style="width:0%"></div>
@@ -190,6 +216,7 @@
       <button type="button" class="btn btn--ghost" id="step3-back">← Back</button>
       {% if current_user.smtp_host %}
       <button type="button" class="btn btn--primary btn--send" id="send-btn">📨 Send Campaign</button>
+      <button type="button" class="btn btn--primary btn--send" id="schedule-btn" style="display:none">🗓️ Create Schedule</button>
       {% else %}
       <a href="{{ url_for('settings') }}" class="btn btn--primary">Configure SMTP first</a>
       {% endif %}

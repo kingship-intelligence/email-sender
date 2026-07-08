@@ -737,6 +737,25 @@ def _fire_scheduled_campaign(sc_id: int, smtp_cfg: dict):
         db.session.commit()
 
 
+FREQUENCY_CHOICES = ("once", "daily", "weekly", "monthly")
+
+
+def _next_occurrence(dt: datetime, frequency: str) -> datetime:
+    """Return the next run time after `dt` for the given frequency."""
+    if frequency == "daily":
+        return dt + timedelta(days=1)
+    if frequency == "monthly":
+        # Add one calendar month, clamping the day if the target month is shorter.
+        month = dt.month + 1
+        year = dt.year + (month - 1) // 12
+        month = (month - 1) % 12 + 1
+        import calendar
+        day = min(dt.day, calendar.monthrange(year, month)[1])
+        return dt.replace(year=year, month=month, day=day)
+    # "weekly" (and any unrecognized value) falls back to weekly.
+    return dt + timedelta(weeks=1)
+
+
 def run_scheduled_campaigns():
     """Checked every minute by APScheduler. Fires any due campaigns."""
     with app.app_context():
@@ -747,6 +766,7 @@ def run_scheduled_campaigns():
         ).all()
         for sc in due:
             old_next = sc.next_run_at
+            is_one_off = sc.frequency == "once"
             # Optimistic lock: only one worker proceeds if next_run_at still matches
             updated = db.session.execute(
                 db.update(ScheduledCampaign)
@@ -755,8 +775,9 @@ def run_scheduled_campaigns():
                     ScheduledCampaign.next_run_at == old_next,
                 )
                 .values(
-                    next_run_at=old_next + timedelta(weeks=1),
+                    next_run_at=old_next if is_one_off else _next_occurrence(old_next, sc.frequency),
                     last_run_at=now,
+                    active=(False if is_one_off else ScheduledCampaign.active),
                 )
             )
             db.session.commit()
@@ -776,6 +797,32 @@ def run_scheduled_campaigns():
             _fire_scheduled_campaign(sc.id, smtp_cfg)
 
 
+def _validate_schedule_input(name, subject, body, emails_list, first_run, frequency):
+    """Shared validation for creating a ScheduledCampaign from any entry point."""
+    errors = []
+    if not name:
+        errors.append("Campaign name is required.")
+    if not subject:
+        errors.append("Subject is required.")
+    if not body:
+        errors.append("Body is required.")
+    if not emails_list:
+        errors.append("At least one email address is required.")
+    if frequency not in FREQUENCY_CHOICES:
+        errors.append("Invalid frequency.")
+
+    next_run_at = None
+    if not first_run:
+        errors.append("First send date/time is required.")
+    else:
+        try:
+            next_run_at = datetime.strptime(first_run, "%Y-%m-%dT%H:%M")
+        except ValueError:
+            errors.append("Invalid date/time format.")
+
+    return errors, next_run_at
+
+
 @app.route("/scheduled", methods=["GET", "POST"])
 @login_required
 @subscription_required
@@ -786,28 +833,12 @@ def scheduled():
         body = request.form.get("body", "").strip()
         emails_raw = request.form.get("emails", "").strip()
         first_run = request.form.get("first_run", "").strip()
-
-        errors = []
-        if not name:
-            errors.append("Campaign name is required.")
-        if not subject:
-            errors.append("Subject is required.")
-        if not body:
-            errors.append("Body is required.")
+        frequency = request.form.get("frequency", "weekly").strip().lower()
 
         emails_list = [e.strip().lower() for e in emails_raw.splitlines() if e.strip()]
         emails_list = list(dict.fromkeys(emails_list))  # deduplicate
-        if not emails_list:
-            errors.append("At least one email address is required.")
 
-        next_run_at = None
-        if not first_run:
-            errors.append("First send date/time is required.")
-        else:
-            try:
-                next_run_at = datetime.strptime(first_run, "%Y-%m-%dT%H:%M")
-            except ValueError:
-                errors.append("Invalid date/time format.")
+        errors, next_run_at = _validate_schedule_input(name, subject, body, emails_list, first_run, frequency)
 
         if errors:
             for e in errors:
@@ -820,14 +851,51 @@ def scheduled():
                 body=body,
                 emails_json=json.dumps(emails_list),
                 next_run_at=next_run_at,
+                frequency=frequency,
             )
             db.session.add(sc)
             db.session.commit()
-            flash(f'Weekly schedule "{name}" created — first send on {next_run_at.strftime("%b %d, %Y at %H:%M")} UTC.', "success")
+            flash(f'{frequency.capitalize()} schedule "{name}" created — first send on {next_run_at.strftime("%b %d, %Y at %H:%M")} UTC.', "success")
         return redirect(url_for("scheduled"))
 
     schedules = ScheduledCampaign.query.filter_by(user_id=current_user.id).order_by(ScheduledCampaign.created_at.desc()).all()
     return render_template("scheduled.html", schedules=schedules)
+
+
+@app.route("/campaign/schedule", methods=["POST"])
+@login_required
+@subscription_required
+def campaign_schedule():
+    """Create a scheduled campaign directly from the New Campaign wizard."""
+    data = request.get_json(silent=True) or {}
+    name = (data.get("name") or "").strip()
+    subject = (data.get("subject") or "").strip()
+    body = (data.get("body") or "").strip()
+    first_run = (data.get("first_run") or "").strip()
+    frequency = (data.get("frequency") or "weekly").strip().lower()
+    emails_list = data.get("emails") or []
+    emails_list = [str(e).strip().lower() for e in emails_list if str(e).strip()]
+    emails_list = list(dict.fromkeys(emails_list))
+
+    errors, next_run_at = _validate_schedule_input(name, subject, body, emails_list, first_run, frequency)
+    if errors:
+        return jsonify({"error": " ".join(errors)}), 400
+
+    sc = ScheduledCampaign(
+        user_id=current_user.id,
+        name=name,
+        subject=subject,
+        body=body,
+        emails_json=json.dumps(emails_list),
+        next_run_at=next_run_at,
+        frequency=frequency,
+    )
+    db.session.add(sc)
+    db.session.commit()
+    return jsonify({
+        "ok": True,
+        "message": f'{frequency.capitalize()} schedule "{name}" created — first send on {next_run_at.strftime("%b %d, %Y at %H:%M")} UTC.',
+    })
 
 
 @app.route("/scheduled/<int:sc_id>/toggle", methods=["POST"])
@@ -870,6 +938,20 @@ def tutorial():
 # ── Init ──────────────────────────────────────────────────────────────────────
 with app.app_context():
     db.create_all()
+    # Lightweight migration: db.create_all() won't add columns to a table
+    # that already exists, so patch in `frequency` if it's missing.
+    try:
+        from sqlalchemy import inspect, text
+        inspector = inspect(db.engine)
+        if "scheduled_campaigns" in inspector.get_table_names():
+            cols = [c["name"] for c in inspector.get_columns("scheduled_campaigns")]
+            if "frequency" not in cols:
+                db.session.execute(text(
+                    "ALTER TABLE scheduled_campaigns ADD COLUMN frequency VARCHAR(20) NOT NULL DEFAULT 'weekly'"
+                ))
+                db.session.commit()
+    except Exception:
+        db.session.rollback()
 
 # Start background scheduler (only in the reloader child in dev; always in prod)
 if os.environ.get("WERKZEUG_RUN_MAIN") == "true" or not app.debug:

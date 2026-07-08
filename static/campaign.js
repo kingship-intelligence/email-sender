@@ -286,8 +286,26 @@ document.getElementById("step2-next").addEventListener("click", () => {
 
 document.getElementById("step3-back").addEventListener("click", () => goToStep(2));
 
-/* ─── Send ────────────────────────────────────────────────────── */
+/* ─── Send / Schedule buttons ─────────────────────────────────── */
 const sendBtn = document.getElementById("send-btn");
+
+/* ─── Schedule toggle ─────────────────────────────────────────── */
+const scheduleCheckbox = document.getElementById("schedule-checkbox");
+const scheduleOptions  = document.getElementById("schedule-options");
+const scheduleAttHint  = document.getElementById("schedule-attachments-hint");
+const scheduleBtn      = document.getElementById("schedule-btn");
+
+if (scheduleCheckbox) {
+  scheduleCheckbox.addEventListener("change", () => {
+    const on = scheduleCheckbox.checked;
+    scheduleOptions.style.display = on ? "" : "none";
+    if (sendBtn) sendBtn.style.display = on ? "none" : "";
+    if (scheduleBtn) scheduleBtn.style.display = on ? "" : "none";
+    if (scheduleAttHint) scheduleAttHint.style.display = (on && attachmentFiles.length > 0) ? "" : "none";
+  });
+}
+
+/* ─── Send ────────────────────────────────────────────────────── */
 if (sendBtn) {
   sendBtn.addEventListener("click", async () => {
     const subject = document.getElementById("subject-input").value.trim();
@@ -359,6 +377,50 @@ if (sendBtn) {
       }
     } catch (e) {
       label.textContent = "Error: " + e.message;
+    }
+  });
+}
+
+/* ─── Schedule ────────────────────────────────────────────────── */
+if (scheduleBtn) {
+  scheduleBtn.addEventListener("click", async () => {
+    const subject = document.getElementById("subject-input").value.trim();
+    const body    = document.getElementById("body-input").value.trim();
+    const nameEl  = document.getElementById("campaign-name-ai") || document.getElementById("campaign-name-manual");
+    const name    = (nameEl ? nameEl.value.trim() : "") || "Campaign";
+    const frequency = document.getElementById("schedule-frequency").value;
+    const firstRun  = document.getElementById("schedule-first-run").value;
+    const selectedEmails = getSelectedEmails();
+
+    if (!firstRun) {
+      alert("Please choose a first send date/time.");
+      return;
+    }
+
+    scheduleBtn.disabled = true;
+    scheduleBtn.textContent = "Creating schedule…";
+
+    try {
+      const resp = await jsonPost("/campaign/schedule", {
+        name,
+        subject,
+        body,
+        emails: selectedEmails,
+        frequency,
+        first_run: firstRun
+      });
+      const data = await resp.json();
+      if (!resp.ok || data.error) {
+        alert(data.error || "Could not create schedule.");
+        scheduleBtn.disabled = false;
+        scheduleBtn.textContent = "🗓️ Create Schedule";
+        return;
+      }
+      window.location.href = "/scheduled";
+    } catch (e) {
+      alert("Could not create schedule: " + e.message);
+      scheduleBtn.disabled = false;
+      scheduleBtn.textContent = "🗓️ Create Schedule";
     }
   });
 }
