@@ -65,6 +65,16 @@
         <button type="button" class="btn btn--sm btn--ghost" id="clear-emails-btn">Clear</button>
       </div>
       <div class="email-chips" id="email-chips"></div>
+
+      <div class="field recipient-limit" id="recipient-limit-wrap" style="display:none">
+        <label for="recipient-limit-slider">
+          Send to
+          <input type="number" id="recipient-limit-number" class="recipient-limit__num" min="1" value="1" />
+          of <span id="recipient-limit-total">0</span> emails
+        </label>
+        <input type="range" id="recipient-limit-slider" min="1" value="1" />
+        <p class="field__hint">Only the first N emails in the list above will be sent to. Move the slider all the way right to send to everyone.</p>
+      </div>
     </div>
 
     <div class="wizard-actions">
@@ -195,3 +205,4 @@
 </script>
 <script src="/static/campaign.js"></script>
 {% endblock %}
+

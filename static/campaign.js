@@ -18,6 +18,55 @@ function jsonPost(url, body) {
 let emails = [];
 let currentStep = 1;
 let attachmentFiles = [];
+let recipientLimit = 0;
+
+/* ─── Recipient limit slider ────────────────────────────────────
+   Lets the user cap sending to the first N emails in the list
+   instead of always sending to everyone that was extracted. */
+const limitWrap   = document.getElementById("recipient-limit-wrap");
+const limitSlider = document.getElementById("recipient-limit-slider");
+const limitNumber = document.getElementById("recipient-limit-number");
+const limitTotal  = document.getElementById("recipient-limit-total");
+
+function getEffectiveMax() {
+  return (typeof SEND_LIMIT === "number" && SEND_LIMIT > 0)
+    ? Math.min(emails.length, SEND_LIMIT)
+    : emails.length;
+}
+
+function syncLimitControls(value) {
+  const max = getEffectiveMax();
+  limitSlider.max = max;
+  limitNumber.max = max;
+  limitTotal.textContent = max;
+
+  let v = parseInt(value, 10);
+  if (isNaN(v) || v < 1) v = 1;
+  if (v > max) v = max;
+
+  recipientLimit = v;
+  limitSlider.value = v;
+  limitNumber.value = v;
+}
+
+function refreshRecipientLimit() {
+  const max = getEffectiveMax();
+  if (max <= 0) {
+    limitWrap.style.display = "none";
+    recipientLimit = 0;
+    return;
+  }
+  limitWrap.style.display = "";
+  // Default to "send to everyone" whenever the list changes size, unless
+  // the user already dialed in a smaller number that's still valid.
+  const keep = recipientLimit > 0 && recipientLimit <= max ? recipientLimit : max;
+  syncLimitControls(keep);
+}
+
+if (limitSlider && limitNumber) {
+  limitSlider.addEventListener("input", () => syncLimitControls(limitSlider.value));
+  limitNumber.addEventListener("input", () => syncLimitControls(limitNumber.value));
+}
 
 /* ─── Step navigation ────────────────────────────────────────── */
 function goToStep(n) {
@@ -59,6 +108,17 @@ function renderChips() {
   countEl.textContent = `${cnt} email${cnt !== 1 ? "s" : ""} found`;
   listWrap.style.display = cnt > 0 ? "" : "none";
   nextBtn.disabled = cnt === 0;
+
+  refreshRecipientLimit();
+}
+
+/* Returns the emails that will actually be sent to, respecting the
+   recipient-limit slider on step 1. */
+function getSelectedEmails() {
+  if (recipientLimit > 0 && recipientLimit < emails.length) {
+    return emails.slice(0, recipientLimit);
+  }
+  return emails;
 }
 
 function setExtractStatus(type, msg) {
@@ -207,7 +267,9 @@ document.getElementById("step2-next").addEventListener("click", () => {
     alert("Please fill in the subject and body.");
     return;
   }
-  document.getElementById("review-count").textContent   = emails.length + " recipient" + (emails.length !== 1 ? "s" : "");
+  const selectedEmails = getSelectedEmails();
+  document.getElementById("review-count").textContent   = selectedEmails.length + " recipient" + (selectedEmails.length !== 1 ? "s" : "")
+    + (selectedEmails.length !== emails.length ? ` (of ${emails.length} found)` : "");
   document.getElementById("review-subject").textContent = subject;
   document.getElementById("review-body").textContent    = body;
 
@@ -240,12 +302,13 @@ if (sendBtn) {
     const bar   = document.getElementById("progress-bar");
     const label = document.getElementById("progress-label");
     const log   = document.getElementById("send-log");
-    const total = emails.length;
+    const selectedEmails = getSelectedEmails();
+    const total = selectedEmails.length;
     let done = 0, ok = 0, fail = 0;
 
     try {
       const fd = new FormData();
-      fd.append("emails", JSON.stringify(emails));
+      fd.append("emails", JSON.stringify(selectedEmails));
       fd.append("subject", subject);
       fd.append("body", body);
       fd.append("name", name);

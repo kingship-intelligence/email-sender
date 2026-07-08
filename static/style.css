@@ -632,3 +632,9 @@ a { color: var(--orange); }
 
 /* ── Form field hint ─────────────────────────────────────────── */
 .field__hint { font-size: .78rem; color: var(--gray-400); margin-top: .3rem; }
+
+/* ── Recipient limit slider ─────────────────────────────────────── */
+.recipient-limit { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--gray-200); }
+.recipient-limit label { display: flex; align-items: center; flex-wrap: wrap; gap: .4rem; font-weight: 600; font-size: .88rem; color: var(--dark); margin-bottom: .5rem; }
+.recipient-limit__num { width: 70px; padding: .35rem .5rem; border: 1px solid var(--gray-200); border-radius: 6px; font-size: .88rem; text-align: center; }
+.recipient-limit input[type="range"] { width: 100%; accent-color: var(--primary); }
