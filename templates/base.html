@@ -3,14 +3,15 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>{% block title %}MailBlast{% endblock %} — MailBlast</title>
+  <title>{% block title %}RushMail{% endblock %} — RushMail</title>
   <link rel="stylesheet" href="/static/style.css" />
   <meta name="csrf-token" content="{{ csrf_token() }}" />
 </head>
 <body class="app-layout">
   <aside class="sidebar">
     <div class="sidebar__brand">
-      <span class="sidebar__name">Mail<span style="color:#000;">Blast</span></span>
+      <img src="{{ url_for('static', filename='img/logo.png') }}" alt="RushMail" class="sidebar__logo" />
+      <span class="sidebar__name">Rush<span style="color:#000;">Mail</span></span>
     </div>
     <nav class="sidebar__nav">
       <a href="{{ url_for('dashboard') }}" class="nav-link {% if request.endpoint == 'dashboard' %}active{% endif %}">

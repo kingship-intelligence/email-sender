@@ -74,7 +74,7 @@
   // Keep unsaved SMTP form input around when the user navigates to another
   // page (e.g. Billing) and comes back, without ever saving it to the server.
   (function () {
-    var STORAGE_KEY = "mailblast_settings_draft";
+    var STORAGE_KEY = "rushmail_settings_draft";
     var form = document.querySelector('form[action="{{ url_for("settings") }}"]');
     if (!form) return;
 

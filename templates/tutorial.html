@@ -5,7 +5,7 @@
 <div class="page-header">
   <div>
     <h1 class="page-title">Tutorial</h1>
-    <p class="page-sub">Step-by-step guides for every feature in MailBlast</p>
+    <p class="page-sub">Step-by-step guides for every feature in RushMail</p>
   </div>
 </div>
 
@@ -17,18 +17,18 @@
       <div class="tutorial-num">1</div>
       <div>
         <h2 class="card-title" style="margin-bottom:0">Configure SMTP</h2>
-        <p class="card-sub" style="margin-bottom:0">Connect your email account so MailBlast can send on your behalf</p>
+        <p class="card-sub" style="margin-bottom:0">Connect your email account so RushMail can send on your behalf</p>
       </div>
     </div>
 
     <div class="tutorial-body">
-      <p>MailBlast sends emails through your own SMTP server — it never stores or proxies your messages. You'll need SMTP credentials from your email provider.</p>
+      <p>RushMail sends emails through your own SMTP server — it never stores or proxies your messages. You'll need SMTP credentials from your email provider.</p>
 
       <h4>Gmail (recommended)</h4>
       <ol class="tutorial-ol">
         <li>In your Google Account, go to <strong>Security → 2-Step Verification</strong> and enable it if you haven't already.</li>
         <li>Then go to <strong>Security → App Passwords</strong> and generate a new app password for "Mail".</li>
-        <li>In MailBlast, open <a href="{{ url_for('settings') }}">Settings</a> and enter:
+        <li>In RushMail, open <a href="{{ url_for('settings') }}">Settings</a> and enter:
           <ul class="tutorial-ul">
             <li><strong>SMTP Host:</strong> <code>smtp.gmail.com</code></li>
             <li><strong>Port:</strong> <code>587</code></li>
@@ -67,7 +67,7 @@
         <li>Click the <strong>Upload File</strong> tab (selected by default).</li>
         <li>Drag and drop a file onto the upload zone, or click <strong>browse</strong> to pick one from your computer.</li>
         <li>Supported formats: <strong>CSV</strong>, <strong>Excel (.xlsx/.xls)</strong>, <strong>PDF</strong>, <strong>Word (.docx)</strong>, and plain <strong>text</strong> files.</li>
-        <li>MailBlast will scan every cell, row, paragraph, and page for email addresses and display them as chips below.</li>
+        <li>RushMail will scan every cell, row, paragraph, and page for email addresses and display them as chips below.</li>
         <li>Click the <strong>×</strong> on any chip to remove an address you don't want.</li>
       </ol>
 
@@ -75,7 +75,7 @@
       <ol class="tutorial-ol">
         <li>Click the <strong>Webpage URL</strong> tab.</li>
         <li>Paste the full URL of a public webpage (e.g. a directory or team page).</li>
-        <li>Click <strong>Extract</strong> — MailBlast will fetch the page and pull every email address from the visible text.</li>
+        <li>Click <strong>Extract</strong> — RushMail will fetch the page and pull every email address from the visible text.</li>
       </ol>
 
       <p>Once you have at least one email, click <strong>Next: Compose →</strong>.</p>

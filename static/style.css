@@ -54,6 +54,7 @@ body { font-family: system-ui, -apple-system, sans-serif; color: var(--gray-900)
   gap: .4rem;
 }
 .auth-brand strong { color: var(--orange); }
+.auth-brand__logo { height: 32px; width: auto; object-fit: contain; }
 .auth-title { font-size: 1.6rem; font-weight: 700; margin-bottom: .25rem; color: var(--dark); }
 .auth-sub   { color: var(--gray-400); margin-bottom: 1.5rem; font-size: .95rem; }
 .auth-switch { text-align: center; margin-top: 1.25rem; font-size: .9rem; color: var(--gray-600); }
@@ -85,7 +86,7 @@ body { font-family: system-ui, -apple-system, sans-serif; color: var(--gray-900)
   margin-bottom: .5rem;
   letter-spacing: -.01em;
 }
-.sidebar__logo { color: var(--orange); font-size: 1.4rem; }
+.sidebar__logo { height: 28px; width: auto; object-fit: contain; }
 .sidebar__name span { color: var(--orange); }
 .sidebar__nav  { flex: 1; padding: .5rem .75rem; display: flex; flex-direction: column; gap: .15rem; }
 

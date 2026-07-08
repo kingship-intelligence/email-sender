@@ -45,7 +45,7 @@ if not _secret:
     )
 app.config["SECRET_KEY"] = _secret
 app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get(
-    "DATABASE_URL", "sqlite:///mailblast.db"
+    "DATABASE_URL", "sqlite:///rushmail.db"
 ).replace("postgres://", "postgresql://")
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["WTF_CSRF_TIME_LIMIT"] = None
@@ -632,7 +632,7 @@ def subscribe_success():
                 db.session.commit()
         except Exception:
             pass
-    flash("Welcome to MailBlast Pro! Your account is now active.", "success")
+    flash("Welcome to RushMail Pro! Your account is now active.", "success")
     return redirect(url_for("dashboard"))
 
 
