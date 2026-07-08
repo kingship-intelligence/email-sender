@@ -68,3 +68,61 @@
   </div>
 </div>
 {% endblock %}
+
+{% block scripts %}
+<script>
+  // Keep unsaved SMTP form input around when the user navigates to another
+  // page (e.g. Billing) and comes back, without ever saving it to the server.
+  (function () {
+    var STORAGE_KEY = "mailblast_settings_draft";
+    var form = document.querySelector('form[action="{{ url_for("settings") }}"]');
+    if (!form) return;
+
+    var fieldIds = ["smtp_host", "smtp_port", "smtp_user", "smtp_pass", "smtp_from"];
+    var checkboxName = "smtp_use_tls";
+
+    function readDraft() {
+      try {
+        return JSON.parse(sessionStorage.getItem(STORAGE_KEY) || "{}");
+      } catch (e) {
+        return {};
+      }
+    }
+
+    function saveDraft() {
+      var draft = {};
+      fieldIds.forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) draft[id] = el.value;
+      });
+      var cb = form.querySelector('[name="' + checkboxName + '"]');
+      if (cb) draft[checkboxName] = cb.checked;
+      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(draft));
+    }
+
+    function clearDraft() {
+      sessionStorage.removeItem(STORAGE_KEY);
+    }
+
+    // Restore any unsaved draft on load (overrides server-rendered values).
+    var draft = readDraft();
+    if (Object.keys(draft).length) {
+      fieldIds.forEach(function (id) {
+        if (draft[id] !== undefined) {
+          var el = document.getElementById(id);
+          if (el) el.value = draft[id];
+        }
+      });
+      var cb = form.querySelector('[name="' + checkboxName + '"]');
+      if (cb && draft[checkboxName] !== undefined) cb.checked = draft[checkboxName];
+    }
+
+    // Save on every keystroke/change so it survives navigating away and back.
+    form.addEventListener("input", saveDraft);
+    form.addEventListener("change", saveDraft);
+
+    // Once the form is actually submitted and saved, drop the draft.
+    form.addEventListener("submit", clearDraft);
+  })();
+</script>
+{% endblock %}
