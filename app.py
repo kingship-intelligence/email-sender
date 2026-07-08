@@ -57,6 +57,15 @@ app.config["SESSION_FILE_DIR"] = os.path.join(os.getcwd(), ".flask_sessions")
 app.config["SESSION_FILE_THRESHOLD"] = 500
 app.config["SESSION_PERMANENT"] = False
 
+# Allow the session cookie to survive being loaded inside a cross-site iframe
+# (e.g. the Replit preview/canvas embeds the app in an iframe on another
+# origin). SameSite=None requires Secure=True, which is safe here since the
+# app is always served over HTTPS in both dev preview and production.
+app.config["SESSION_COOKIE_SAMESITE"] = "None"
+app.config["SESSION_COOKIE_SECURE"] = True
+app.config["REMEMBER_COOKIE_SAMESITE"] = "None"
+app.config["REMEMBER_COOKIE_SECURE"] = True
+
 db.init_app(app)
 bcrypt = Bcrypt(app)
 csrf = CSRFProtect(app)
