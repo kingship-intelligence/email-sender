@@ -637,8 +637,11 @@ a { color: var(--orange); }
 .btn--danger { background: #fee2e2; color: #b91c1c; border: 1px solid #fca5a5; }
 .btn--danger:hover { background: #fca5a5; }
 
-/* ── Form field hint ─────────────────────────────────────────── */
+/* ── Form field hint & inline errors ────────────────────────── */
 .field__hint { font-size: .78rem; color: var(--gray-400); margin-top: .3rem; }
+.field__errors { font-size: .8rem; color: var(--red); margin-top: .35rem; padding-left: 1.1em; display: flex; flex-direction: column; gap: .15rem; }
+.field__error-msg { font-size: .8rem; color: var(--red); margin-top: .3rem; }
+.field__input--error { border-color: var(--red) !important; }
 
 /* ── Recipient limit slider ─────────────────────────────────────── */
 .recipient-limit { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--gray-200); }

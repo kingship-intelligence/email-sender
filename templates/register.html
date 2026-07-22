@@ -15,7 +15,7 @@
     {% with messages = get_flashed_messages(with_categories=true) %}
       {% if messages %}
         {% for cat, msg in messages %}
-          <div class="flash flash--{{ cat }}">{{ msg }}</div>
+          <div class="flash flash--{{ cat }}">{{ msg | safe }}</div>
         {% endfor %}
       {% endif %}
     {% endwith %}
@@ -24,12 +24,20 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
       <div class="field">
         <label for="email">Email</label>
-        <input type="email" id="email" name="email" placeholder="you@example.com" required autofocus />
+        <input type="email" id="email" name="email" placeholder="you@example.com" required autofocus autocomplete="email" value="{{ email or '' }}" />
       </div>
       <div class="field">
         <label for="password">Password</label>
-        <input type="password" id="password" name="password" placeholder="••••••••" required autocomplete="new-password" />
-        <p class="field__hint">8+ characters · one uppercase · one number · one special character</p>
+        <input type="password" id="password" name="password" placeholder="••••••••" required autocomplete="new-password" class="{{ 'field__input--error' if password_errors }}" />
+        {% if password_errors %}
+          <ul class="field__errors">
+            {% for e in password_errors %}
+              <li>Needs {{ e }}</li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p class="field__hint">8+ characters · one uppercase · one number · one special character</p>
+        {% endif %}
       </div>
       <div class="field">
         <label for="password2">Confirm password</label>

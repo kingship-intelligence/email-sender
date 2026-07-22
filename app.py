@@ -190,31 +190,70 @@ def verify_reset_token(token: str, max_age: int = 3600):
 
 
 # ── Auth email sender ─────────────────────────────────────────────────────────
-def _send_auth_email(user: "User", subject: str, body_html: str) -> bool:
-    """Send a transactional email via the user's own SMTP settings.
-    Returns True on success, False if SMTP is not configured or send fails."""
-    if not user.smtp_host or not user.smtp_pass_enc:
-        return False
-    try:
-        smtp_pass = decrypt_password(user.smtp_pass_enc)
-        from_addr = user.smtp_from or user.smtp_user
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = subject
-        msg["From"]    = from_addr
-        msg["To"]      = user.email
-        msg.attach(MIMEText(body_html, "html"))
+# App-level SMTP for transactional auth emails (verify / reset).
+# If these env vars are set, they are tried first so that new users who
+# haven't configured their own SMTP can still receive verification emails.
+# Falls back to the user's own SMTP settings if app-level SMTP is absent.
+_APP_SMTP_HOST = os.environ.get("AUTH_SMTP_HOST", "")
+_APP_SMTP_PORT = int(os.environ.get("AUTH_SMTP_PORT", "587") or "587")
+_APP_SMTP_USER = os.environ.get("AUTH_SMTP_USER", "")
+_APP_SMTP_PASS = os.environ.get("AUTH_SMTP_PASS", "")
+_APP_SMTP_FROM = os.environ.get("AUTH_SMTP_FROM", "")
+_APP_SMTP_TLS  = os.environ.get("AUTH_SMTP_TLS", "true").lower() != "false"
 
-        if user.smtp_use_tls:
-            server = smtplib.SMTP(user.smtp_host, user.smtp_port, timeout=15)
+
+def _smtp_send(host, port, user, password, use_tls, from_addr, to_addr, msg_str) -> bool:
+    try:
+        if use_tls:
+            server = smtplib.SMTP(host, port, timeout=15)
             server.starttls()
         else:
-            server = smtplib.SMTP_SSL(user.smtp_host, user.smtp_port, timeout=15)
-        server.login(user.smtp_user, smtp_pass)
-        server.sendmail(from_addr, [user.email], msg.as_string())
+            server = smtplib.SMTP_SSL(host, port, timeout=15)
+        server.login(user, password)
+        server.sendmail(from_addr, [to_addr], msg_str)
         server.quit()
         return True
     except Exception:
         return False
+
+
+def _send_auth_email(user: "User", subject: str, body_html: str) -> bool:
+    """Send a transactional email for account verification or password reset.
+
+    Tries, in order:
+      1. App-level SMTP (AUTH_SMTP_* env vars) — works even for new users
+      2. The user's own SMTP settings — works if already configured
+    Returns True on success, False if neither is available or the send fails.
+    """
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["To"]      = user.email
+    msg.attach(MIMEText(body_html, "html"))
+
+    # 1 — App-level SMTP
+    if _APP_SMTP_HOST and _APP_SMTP_USER and _APP_SMTP_PASS:
+        from_addr = _APP_SMTP_FROM or _APP_SMTP_USER
+        msg["From"] = from_addr
+        if _smtp_send(_APP_SMTP_HOST, _APP_SMTP_PORT, _APP_SMTP_USER,
+                      _APP_SMTP_PASS, _APP_SMTP_TLS, from_addr, user.email,
+                      msg.as_string()):
+            return True
+
+    # 2 — User's own SMTP
+    if user.smtp_host and user.smtp_pass_enc:
+        try:
+            smtp_pass = decrypt_password(user.smtp_pass_enc)
+            from_addr = user.smtp_from or user.smtp_user
+            if "From" not in msg:
+                msg["From"] = from_addr
+            if _smtp_send(user.smtp_host, user.smtp_port, user.smtp_user,
+                          smtp_pass, user.smtp_use_tls, from_addr, user.email,
+                          msg.as_string()):
+                return True
+        except Exception:
+            pass
+
+    return False
 
 
 # ── Subscription guard ────────────────────────────────────────────────────────
@@ -269,9 +308,10 @@ def register():
         password2 = request.form.get("password2", "")
         policy_errors = validate_password(password)
         if policy_errors:
-            flash("Password must include: " + ", ".join(policy_errors) + ".", "error")
+            return render_template("register.html", password_errors=policy_errors, email=email)
         elif password != password2:
             flash("Passwords do not match.", "error")
+            return render_template("register.html", password_errors=[], email=email)
         elif User.query.filter_by(email=email).first():
             flash("An account with that email already exists.", "error")
         else:
@@ -299,14 +339,15 @@ def register():
             if sent:
                 flash("Account created! Check your email to verify your address before signing in.", "success")
             else:
-                # No SMTP configured yet — auto-verify so they're not locked out
-                user.verified = True
-                db.session.commit()
-                login_user(user)
-                flash("Account created! Set up SMTP in Settings to enable email features.", "success")
-                return redirect(url_for("pricing"))
+                # No app-level or user SMTP available — surface the verify link
+                # directly so the user can verify without email delivery.
+                flash(
+                    f'Account created! Email delivery is not configured, so click this link to verify your account: '
+                    f'<a href="{verify_url}">{verify_url}</a>',
+                    "success"
+                )
             return redirect(url_for("login"))
-    return render_template("register.html")
+    return render_template("register.html", password_errors=[])
 
 
 @app.route("/verify/<token>")
@@ -355,7 +396,7 @@ def forgot_password():
     if request.method == "POST":
         email = request.form.get("email", "").strip().lower()
         user = User.query.filter_by(email=email).first()
-        if user and user.smtp_host:
+        if user:
             token = make_reset_token(user.id)
             reset_url = get_domain() + url_for("reset_password", token=token)
             _send_auth_email(
@@ -390,16 +431,16 @@ def reset_password(token):
         password2 = request.form.get("password2", "")
         policy_errors = validate_password(password)
         if policy_errors:
-            flash("Password must include: " + ", ".join(policy_errors) + ".", "error")
+            return render_template("reset_password.html", token=token, password_errors=policy_errors)
         elif password != password2:
-            flash("Passwords do not match.", "error")
+            return render_template("reset_password.html", token=token, password_errors=[], mismatch=True)
         else:
             user.password_hash = bcrypt.generate_password_hash(password).decode()
             user.verified = True  # also verify if they weren't
             db.session.commit()
             flash("Password updated! You can now sign in.", "success")
             return redirect(url_for("login"))
-    return render_template("reset_password.html", token=token)
+    return render_template("reset_password.html", token=token, password_errors=[])
 
 
 @app.route("/logout")
