@@ -901,7 +901,8 @@ def settings_test_email():
     )
     msg["Subject"] = "RushMail SMTP test"
     msg["From"] = from_addr
-    msg["To"] = current_user.email
+    to_addr = current_user.smtp_from or current_user.smtp_user
+    msg["To"] = to_addr
 
     try:
         if current_user.smtp_use_tls:
@@ -911,12 +912,12 @@ def settings_test_email():
         else:
             server = smtplib.SMTP_SSL(current_user.smtp_host, current_user.smtp_port, timeout=15)
         server.login(current_user.smtp_user, smtp_pass)
-        server.sendmail(from_addr, [current_user.email], msg.as_string())
+        server.sendmail(from_addr, [to_addr], msg.as_string())
         server.quit()
     except Exception as e:
         return jsonify({"error": f"{type(e).__name__}: {e}"}), 400
 
-    return jsonify({"ok": True, "message": f"Test email sent to {current_user.email} — check your inbox."})
+    return jsonify({"ok": True, "message": f"Test email sent to {to_addr} — check your inbox."})
 
 
 # ── Stripe / Pricing ──────────────────────────────────────────────────────────
