@@ -28,11 +28,12 @@
       </div>
       <div class="field">
         <label for="password">Password</label>
-        <input type="password" id="password" name="password" placeholder="At least 8 characters" required minlength="8" />
+        <input type="password" id="password" name="password" placeholder="••••••••" required autocomplete="new-password" />
+        <p class="field__hint">8+ characters · one uppercase · one number · one special character</p>
       </div>
       <div class="field">
         <label for="password2">Confirm password</label>
-        <input type="password" id="password2" name="password2" placeholder="••••••••" required minlength="8" />
+        <input type="password" id="password2" name="password2" placeholder="••••••••" required autocomplete="new-password" />
       </div>
       <button type="submit" class="btn btn--primary btn--full">Create account</button>
     </form>

@@ -22,6 +22,7 @@ class User(db.Model, UserMixin):
     smtp_use_tls = db.Column(db.Boolean, default=True)
     smtp_from = db.Column(db.String(255))
 
+    verified = db.Column(db.Boolean, default=False, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     campaigns = db.relationship("Campaign", backref="user", lazy=True, cascade="all, delete-orphan")
 

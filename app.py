@@ -22,7 +22,10 @@ from flask_login import LoginManager, login_user, logout_user, login_required, c
 from flask_bcrypt import Bcrypt
 from flask_wtf.csrf import CSRFProtect
 from flask_session import Session
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from cryptography.fernet import Fernet
+from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from apscheduler.schedulers.background import BackgroundScheduler
 
 import stripe
@@ -74,6 +77,13 @@ Session(app)
 login_manager = LoginManager(app)
 login_manager.login_view = "login"
 login_manager.login_message_category = "error"
+
+limiter = Limiter(
+    key_func=get_remote_address,
+    app=app,
+    default_limits=[],
+    storage_uri="memory://",
+)
 
 # ── Stripe ────────────────────────────────────────────────────────────────────
 STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
@@ -130,6 +140,83 @@ def get_domain():
     return request.host_url.rstrip("/")
 
 
+# ── Password policy ───────────────────────────────────────────────────────────
+_PASS_RE_UPPER   = re.compile(r"[A-Z]")
+_PASS_RE_DIGIT   = re.compile(r"\d")
+_PASS_RE_SPECIAL = re.compile(r"[!@#$%^&*()\-_=+\[\]{};:',.<>?/\\|`~]")
+
+
+def validate_password(password: str) -> list[str]:
+    """Return a list of unmet password policy requirements (empty = OK)."""
+    errors = []
+    if len(password) < 8:
+        errors.append("at least 8 characters")
+    if not _PASS_RE_UPPER.search(password):
+        errors.append("one uppercase letter")
+    if not _PASS_RE_DIGIT.search(password):
+        errors.append("one number")
+    if not _PASS_RE_SPECIAL.search(password):
+        errors.append("one special character (!@#$%^&* …)")
+    return errors
+
+
+# ── Auth email tokens ─────────────────────────────────────────────────────────
+def _get_serializer(salt: str) -> URLSafeTimedSerializer:
+    return URLSafeTimedSerializer(app.config["SECRET_KEY"], salt=salt)
+
+
+def make_verification_token(user_id: int) -> str:
+    return _get_serializer("email-verify").dumps(user_id)
+
+
+def verify_verification_token(token: str, max_age: int = 86400):
+    """Return user_id or None (token invalid / expired after 24 h)."""
+    try:
+        return _get_serializer("email-verify").loads(token, max_age=max_age)
+    except (BadSignature, SignatureExpired):
+        return None
+
+
+def make_reset_token(user_id: int) -> str:
+    return _get_serializer("password-reset").dumps(user_id)
+
+
+def verify_reset_token(token: str, max_age: int = 3600):
+    """Return user_id or None (token invalid / expired after 1 h)."""
+    try:
+        return _get_serializer("password-reset").loads(token, max_age=max_age)
+    except (BadSignature, SignatureExpired):
+        return None
+
+
+# ── Auth email sender ─────────────────────────────────────────────────────────
+def _send_auth_email(user: "User", subject: str, body_html: str) -> bool:
+    """Send a transactional email via the user's own SMTP settings.
+    Returns True on success, False if SMTP is not configured or send fails."""
+    if not user.smtp_host or not user.smtp_pass_enc:
+        return False
+    try:
+        smtp_pass = decrypt_password(user.smtp_pass_enc)
+        from_addr = user.smtp_from or user.smtp_user
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"]    = from_addr
+        msg["To"]      = user.email
+        msg.attach(MIMEText(body_html, "html"))
+
+        if user.smtp_use_tls:
+            server = smtplib.SMTP(user.smtp_host, user.smtp_port, timeout=15)
+            server.starttls()
+        else:
+            server = smtplib.SMTP_SSL(user.smtp_host, user.smtp_port, timeout=15)
+        server.login(user.smtp_user, smtp_pass)
+        server.sendmail(from_addr, [user.email], msg.as_string())
+        server.quit()
+        return True
+    except Exception:
+        return False
+
+
 # ── Subscription guard ────────────────────────────────────────────────────────
 def subscription_required(f):
     @wraps(f)
@@ -150,6 +237,7 @@ def index():
 
 
 @app.route("/login", methods=["GET", "POST"])
+@limiter.limit("5 per 15 minutes", methods=["POST"], error_message="Too many login attempts. Please wait 15 minutes and try again.")
 def login():
     if current_user.is_authenticated:
         return redirect(url_for("dashboard"))
@@ -158,6 +246,13 @@ def login():
         password = request.form.get("password", "")
         user = User.query.filter_by(email=email).first()
         if user and bcrypt.check_password_hash(user.password_hash, password):
+            if not user.verified:
+                flash(
+                    "Please verify your email before signing in. "
+                    "<a href=\"" + url_for("resend_verification", email=user.email) + "\">Resend verification email</a>",
+                    "error"
+                )
+                return render_template("login.html")
             login_user(user)
             return redirect(url_for("dashboard"))
         flash("Invalid email or password.", "error")
@@ -172,8 +267,9 @@ def register():
         email = request.form.get("email", "").strip().lower()
         password = request.form.get("password", "")
         password2 = request.form.get("password2", "")
-        if len(password) < 8:
-            flash("Password must be at least 8 characters.", "error")
+        policy_errors = validate_password(password)
+        if policy_errors:
+            flash("Password must include: " + ", ".join(policy_errors) + ".", "error")
         elif password != password2:
             flash("Passwords do not match.", "error")
         elif User.query.filter_by(email=email).first():
@@ -181,14 +277,129 @@ def register():
         else:
             user = User(
                 email=email,
-                password_hash=bcrypt.generate_password_hash(password).decode()
+                password_hash=bcrypt.generate_password_hash(password).decode(),
+                verified=False,
             )
             db.session.add(user)
             db.session.commit()
-            login_user(user)
-            flash("Account created! Subscribe below to get started.", "success")
-            return redirect(url_for("pricing"))
+            # Send verification email
+            token = make_verification_token(user.id)
+            verify_url = get_domain() + url_for("verify_email", token=token)
+            sent = _send_auth_email(
+                user,
+                "Verify your RushMail account",
+                f"""
+                <p>Hi,</p>
+                <p>Thanks for signing up to RushMail! Click the button below to verify your email address.
+                This link expires in 24 hours.</p>
+                <p><a href="{verify_url}" style="background:#f97316;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;font-weight:bold">Verify Email</a></p>
+                <p>Or paste this link into your browser:<br><a href="{verify_url}">{verify_url}</a></p>
+                """,
+            )
+            if sent:
+                flash("Account created! Check your email to verify your address before signing in.", "success")
+            else:
+                # No SMTP configured yet — auto-verify so they're not locked out
+                user.verified = True
+                db.session.commit()
+                login_user(user)
+                flash("Account created! Set up SMTP in Settings to enable email features.", "success")
+                return redirect(url_for("pricing"))
+            return redirect(url_for("login"))
     return render_template("register.html")
+
+
+@app.route("/verify/<token>")
+def verify_email(token):
+    user_id = verify_verification_token(token)
+    if not user_id:
+        flash("That verification link is invalid or has expired.", "error")
+        return redirect(url_for("login"))
+    user = db.session.get(User, user_id)
+    if not user:
+        flash("Account not found.", "error")
+        return redirect(url_for("login"))
+    if user.verified:
+        flash("Your email is already verified — you can sign in.", "success")
+        return redirect(url_for("login"))
+    user.verified = True
+    db.session.commit()
+    flash("Email verified! You can now sign in.", "success")
+    return redirect(url_for("login"))
+
+
+@app.route("/resend-verification")
+def resend_verification():
+    email = request.args.get("email", "").strip().lower()
+    user = User.query.filter_by(email=email).first()
+    if user and not user.verified:
+        token = make_verification_token(user.id)
+        verify_url = get_domain() + url_for("verify_email", token=token)
+        _send_auth_email(
+            user,
+            "Verify your RushMail account",
+            f"""
+            <p>Hi,</p>
+            <p>Here's your new verification link. It expires in 24 hours.</p>
+            <p><a href="{verify_url}" style="background:#f97316;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;font-weight:bold">Verify Email</a></p>
+            <p>Or paste this link:<br><a href="{verify_url}">{verify_url}</a></p>
+            """,
+        )
+    flash("If that address is registered and unverified, we sent a new link. Check your inbox.", "success")
+    return redirect(url_for("login"))
+
+
+@app.route("/forgot-password", methods=["GET", "POST"])
+@limiter.limit("5 per hour", methods=["POST"])
+def forgot_password():
+    if request.method == "POST":
+        email = request.form.get("email", "").strip().lower()
+        user = User.query.filter_by(email=email).first()
+        if user and user.smtp_host:
+            token = make_reset_token(user.id)
+            reset_url = get_domain() + url_for("reset_password", token=token)
+            _send_auth_email(
+                user,
+                "Reset your RushMail password",
+                f"""
+                <p>Hi,</p>
+                <p>Someone requested a password reset for your RushMail account.
+                Click the button below to set a new password. This link expires in 1 hour.</p>
+                <p><a href="{reset_url}" style="background:#f97316;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;font-weight:bold">Reset Password</a></p>
+                <p>If you didn't request this, you can safely ignore this email.</p>
+                <p>Or paste this link:<br><a href="{reset_url}">{reset_url}</a></p>
+                """,
+            )
+        flash("If an account with that email exists, we've sent a reset link. Check your inbox.", "success")
+        return redirect(url_for("login"))
+    return render_template("forgot_password.html")
+
+
+@app.route("/reset-password/<token>", methods=["GET", "POST"])
+def reset_password(token):
+    user_id = verify_reset_token(token)
+    if not user_id:
+        flash("That reset link is invalid or has expired (links expire after 1 hour).", "error")
+        return redirect(url_for("forgot_password"))
+    user = db.session.get(User, user_id)
+    if not user:
+        flash("Account not found.", "error")
+        return redirect(url_for("login"))
+    if request.method == "POST":
+        password  = request.form.get("password", "")
+        password2 = request.form.get("password2", "")
+        policy_errors = validate_password(password)
+        if policy_errors:
+            flash("Password must include: " + ", ".join(policy_errors) + ".", "error")
+        elif password != password2:
+            flash("Passwords do not match.", "error")
+        else:
+            user.password_hash = bcrypt.generate_password_hash(password).decode()
+            user.verified = True  # also verify if they weren't
+            db.session.commit()
+            flash("Password updated! You can now sign in.", "success")
+            return redirect(url_for("login"))
+    return render_template("reset_password.html", token=token)
 
 
 @app.route("/logout")
@@ -938,8 +1149,7 @@ def tutorial():
 # ── Init ──────────────────────────────────────────────────────────────────────
 with app.app_context():
     db.create_all()
-    # Lightweight migration: db.create_all() won't add columns to a table
-    # that already exists, so patch in `frequency` if it's missing.
+    # Lightweight migrations: db.create_all() won't add columns to existing tables.
     try:
         from sqlalchemy import inspect, text
         inspector = inspect(db.engine)
@@ -948,6 +1158,13 @@ with app.app_context():
             if "frequency" not in cols:
                 db.session.execute(text(
                     "ALTER TABLE scheduled_campaigns ADD COLUMN frequency VARCHAR(20) NOT NULL DEFAULT 'weekly'"
+                ))
+                db.session.commit()
+        if "users" in inspector.get_table_names():
+            user_cols = [c["name"] for c in inspector.get_columns("users")]
+            if "verified" not in user_cols:
+                db.session.execute(text(
+                    "ALTER TABLE users ADD COLUMN verified BOOLEAN NOT NULL DEFAULT TRUE"
                 ))
                 db.session.commit()
     except Exception:
