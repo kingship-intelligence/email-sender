@@ -210,7 +210,8 @@ if (genBtn) {
       .then(data => {
         if (data.error) { setGenStatus("error", data.error); return; }
         document.getElementById("subject-input").value = data.subject;
-        document.getElementById("body-input").value    = data.body;
+        const pastedHtml = '<p>' + data.body.replace(/\n\n+/g, '</p><p>').replace(/\n/g, '<br>') + '</p>';
+        bodyQuill.clipboard.dangerouslyPasteHTML(pastedHtml);
         setGenStatus("success", "Email generated! Feel free to edit it below.");
       })
       .catch(e => setGenStatus("error", "Generation failed: " + e.message))
@@ -261,17 +262,19 @@ function renderAttachments() {
 
 /* ─── Step 2 → 3 ──────────────────────────────────────────────── */
 document.getElementById("step2-next").addEventListener("click", () => {
-  const subject = document.getElementById("subject-input").value.trim();
-  const body    = document.getElementById("body-input").value.trim();
-  if (!subject || !body) {
+  const subject  = document.getElementById("subject-input").value.trim();
+  const bodyHtml = bodyQuill.root.innerHTML;
+  const bodyText = bodyQuill.getText().trim();
+  if (!subject || !bodyText) {
     alert("Please fill in the subject and body.");
     return;
   }
+  document.getElementById("body-input").value = bodyHtml;
   const selectedEmails = getSelectedEmails();
   document.getElementById("review-count").textContent   = selectedEmails.length + " recipient" + (selectedEmails.length !== 1 ? "s" : "")
     + (selectedEmails.length !== emails.length ? ` (of ${emails.length} found)` : "");
   document.getElementById("review-subject").textContent = subject;
-  document.getElementById("review-body").textContent    = body;
+  document.getElementById("review-body").innerHTML      = bodyHtml;
 
   const attItem = document.getElementById("review-attachments-item");
   if (attachmentFiles.length > 0) {
@@ -309,7 +312,7 @@ if (scheduleCheckbox) {
 if (sendBtn) {
   sendBtn.addEventListener("click", async () => {
     const subject = document.getElementById("subject-input").value.trim();
-    const body    = document.getElementById("body-input").value.trim();
+    const body    = bodyQuill.root.innerHTML;
     const nameEl  = document.getElementById("campaign-name-ai") || document.getElementById("campaign-name-manual");
     const name    = (nameEl ? nameEl.value.trim() : "") || "Campaign";
 
@@ -385,7 +388,7 @@ if (sendBtn) {
 if (scheduleBtn) {
   scheduleBtn.addEventListener("click", async () => {
     const subject = document.getElementById("subject-input").value.trim();
-    const body    = document.getElementById("body-input").value.trim();
+    const body    = bodyQuill.root.innerHTML;
     const nameEl  = document.getElementById("campaign-name-ai") || document.getElementById("campaign-name-manual");
     const name    = (nameEl ? nameEl.value.trim() : "") || "Campaign";
     const frequency = document.getElementById("schedule-frequency").value;
@@ -430,7 +433,10 @@ if (typeof PREFILL !== "undefined" && PREFILL) {
   emails = Array.isArray(PREFILL.emails) ? PREFILL.emails.slice() : [];
   renderChips();
   if (PREFILL.subject) document.getElementById("subject-input").value = PREFILL.subject;
-  if (PREFILL.body)    document.getElementById("body-input").value    = PREFILL.body;
+  if (PREFILL.body) {
+    const html = '<p>' + PREFILL.body.replace(/\n\n+/g, '</p><p>').replace(/\n/g, '<br>') + '</p>';
+    bodyQuill.clipboard.dangerouslyPasteHTML(html);
+  }
   if (PREFILL.name) {
     const nameEl = document.getElementById("campaign-name-ai") || document.getElementById("campaign-name-manual");
     if (nameEl) nameEl.value = PREFILL.name;

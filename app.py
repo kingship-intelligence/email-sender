@@ -736,7 +736,8 @@ def send_bulk():
     except Exception:
         return jsonify({"error": "Invalid emails payload."}), 400
 
-    if not emails or not subject or not body:
+    body_text = re.sub(r"<[^>]+>", "", body).strip()
+    if not emails or not subject or not body_text:
         return jsonify({"error": "emails, subject, and body are required."}), 400
 
     if not current_user.smtp_host:
@@ -817,7 +818,7 @@ def send_bulk():
                 msg["From"] = from_addr
                 msg["To"] = r_email
                 msg["Subject"] = subject
-                msg.attach(MIMEText(body, "plain"))
+                msg.attach(MIMEText(body, "html"))
 
                 for att_name, att_data, att_mime in attachments:
                     maintype, subtype = att_mime.split("/", 1) if "/" in att_mime else ("application", "octet-stream")
@@ -1059,7 +1060,7 @@ def _fire_scheduled_campaign(sc_id: int, smtp_cfg: dict):
                     msg["From"] = from_addr
                     msg["To"] = addr
                     msg["Subject"] = subject
-                    msg.attach(MIMEText(body, "plain"))
+                    msg.attach(MIMEText(body, "html"))
                     server.sendmail(from_addr, addr, msg.as_string())
                     ok += 1
                 except Exception:

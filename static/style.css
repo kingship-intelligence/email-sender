@@ -416,7 +416,6 @@ textarea { resize: vertical; }
   border: 1px solid var(--gray-200);
   border-radius: var(--radius);
   padding: .75rem;
-  white-space: pre-wrap;
   max-height: 200px;
   overflow-y: auto;
 }

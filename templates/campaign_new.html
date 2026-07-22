@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}New Campaign{% endblock %}
+{% block extra_head %}<link href="https://cdn.jsdelivr.net/npm/quill@2/dist/quill.snow.css" rel="stylesheet" />{% endblock %}
 
 {% block content %}
 <div class="page-header">
@@ -108,8 +109,9 @@
       <input type="text" id="subject-input" placeholder="Your subject line" required />
     </div>
     <div class="field">
-      <label for="body-input">Email body</label>
-      <textarea id="body-input" rows="10" placeholder="Write your email here…" required></textarea>
+      <label>Email body</label>
+      <div id="body-editor" style="height:240px;background:#fff;border-radius:6px;"></div>
+      <textarea id="body-input" style="display:none"></textarea>
     </div>
 
     <!-- Attachments -->
@@ -146,7 +148,7 @@
       </div>
       <div class="review-item full">
         <span class="review-label">Preview</span>
-        <pre class="review-body" id="review-body">—</pre>
+        <div class="review-body" id="review-body">—</div>
       </div>
       <div class="review-item" id="review-attachments-item" style="display:none">
         <span class="review-label">Attachments</span>
@@ -226,6 +228,7 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/quill@2/dist/quill.js"></script>
 <script>
   const IS_PRO = true;
   const SEND_LIMIT = null;
@@ -234,6 +237,26 @@
   {% else %}
   const PREFILL = null;
   {% endif %}
+
+  const toolbarOptions = [
+    [{ font: [] }, { size: ['small', false, 'large', 'huge'] }],
+    ['bold', 'italic', 'underline', 'strike'],
+    [{ color: [] }, { background: [] }],
+    [{ header: [1, 2, 3, false] }],
+    [{ list: 'ordered' }, { list: 'bullet' }],
+    [{ indent: '-1' }, { indent: '+1' }, { align: [] }],
+    ['link', 'clean']
+  ];
+
+  const bodyQuill = new Quill('#body-editor', {
+    theme: 'snow',
+    placeholder: 'Write your email here — use the toolbar to bold, italicise, change font, indent…',
+    modules: { toolbar: toolbarOptions }
+  });
+
+  bodyQuill.on('text-change', () => {
+    document.getElementById('body-input').value = bodyQuill.root.innerHTML;
+  });
 </script>
 <script src="/static/campaign.js"></script>
 {% endblock %}
