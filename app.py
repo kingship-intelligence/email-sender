@@ -461,7 +461,14 @@ def dashboard():
         .order_by(Campaign.created_at.desc())
         .all()
     )
-    return render_template("dashboard.html", campaigns=campaigns)
+    stats = {
+        "campaigns": len(campaigns),
+        "sent_ok": sum(c.sent_ok or 0 for c in campaigns),
+        "sent_fail": sum(c.sent_fail or 0 for c in campaigns),
+    }
+    attempted = stats["sent_ok"] + stats["sent_fail"]
+    stats["rate"] = round(stats["sent_ok"] / attempted * 100, 1) if attempted else None
+    return render_template("dashboard.html", campaigns=campaigns, stats=stats)
 
 
 # ── Campaign ──────────────────────────────────────────────────────────────────
@@ -479,6 +486,52 @@ def campaign_detail(campaign_id):
     campaign = Campaign.query.filter_by(id=campaign_id, user_id=current_user.id).first_or_404()
     recipients = CampaignRecipient.query.filter_by(campaign_id=campaign.id).all()
     return render_template("campaign_detail.html", campaign=campaign, recipients=recipients)
+
+
+@app.route("/campaign/<int:campaign_id>/resend-failed")
+@login_required
+@subscription_required
+def campaign_resend_failed(campaign_id):
+    """Open the campaign wizard pre-filled with this campaign's failed recipients."""
+    campaign = Campaign.query.filter_by(id=campaign_id, user_id=current_user.id).first_or_404()
+    failed = [
+        r.email
+        for r in CampaignRecipient.query.filter_by(campaign_id=campaign.id, status="failed").all()
+    ]
+    if not failed:
+        flash("This campaign has no failed recipients to resend to.", "error")
+        return redirect(url_for("campaign_detail", campaign_id=campaign.id))
+    prefill = {
+        "name": f"{campaign.name} (retry)",
+        "subject": campaign.subject or "",
+        "body": campaign.body or "",
+        "emails": failed,
+    }
+    return render_template("campaign_new.html", prefill=prefill)
+
+
+@app.route("/campaign/<int:campaign_id>/export.csv")
+@login_required
+@subscription_required
+def campaign_export(campaign_id):
+    campaign = Campaign.query.filter_by(id=campaign_id, user_id=current_user.id).first_or_404()
+    recipients = CampaignRecipient.query.filter_by(campaign_id=campaign.id).all()
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["email", "status", "sent_at", "error"])
+    for r in recipients:
+        writer.writerow([
+            r.email,
+            r.status,
+            r.sent_at.isoformat() if r.sent_at else "",
+            r.error or "",
+        ])
+    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", campaign.name or "campaign").strip("_") or "campaign"
+    return Response(
+        buf.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}_recipients.csv"'},
+    )
 
 
 @app.route("/extract", methods=["POST"])
@@ -825,6 +878,45 @@ def settings():
         flash("Settings saved.", "success")
         return redirect(url_for("settings"))
     return render_template("settings.html", stripe_enabled=STRIPE_ENABLED)
+
+
+@app.route("/settings/test-email", methods=["POST"])
+@login_required
+@subscription_required
+@limiter.limit("5 per minute")
+def settings_test_email():
+    """Send a test email to the user's own address using their saved SMTP settings."""
+    if not (current_user.smtp_host and current_user.smtp_user and current_user.smtp_pass_enc):
+        return jsonify({"error": "Save your SMTP settings first, then send a test."}), 400
+    try:
+        smtp_pass = decrypt_password(current_user.smtp_pass_enc)
+    except Exception:
+        return jsonify({"error": "Stored SMTP password could not be decrypted. Re-enter and save it."}), 400
+
+    from_addr = current_user.smtp_from or current_user.smtp_user
+    msg = MIMEText(
+        "This is a test email from RushMail.\n\n"
+        "If you're reading this, your SMTP settings are working and you're ready to send campaigns.",
+        "plain",
+    )
+    msg["Subject"] = "RushMail SMTP test"
+    msg["From"] = from_addr
+    msg["To"] = current_user.email
+
+    try:
+        if current_user.smtp_use_tls:
+            server = smtplib.SMTP(current_user.smtp_host, current_user.smtp_port, timeout=15)
+            server.ehlo()
+            server.starttls()
+        else:
+            server = smtplib.SMTP_SSL(current_user.smtp_host, current_user.smtp_port, timeout=15)
+        server.login(current_user.smtp_user, smtp_pass)
+        server.sendmail(from_addr, [current_user.email], msg.as_string())
+        server.quit()
+    except Exception as e:
+        return jsonify({"error": f"{type(e).__name__}: {e}"}), 400
+
+    return jsonify({"ok": True, "message": f"Test email sent to {current_user.email} — check your inbox."})
 
 
 # ── Stripe / Pricing ──────────────────────────────────────────────────────────

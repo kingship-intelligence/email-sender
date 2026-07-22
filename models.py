@@ -30,10 +30,6 @@ class User(db.Model, UserMixin):
     def is_pro(self):
         return self.plan == "pro"
 
-    @property
-    def send_limit(self):
-        return None if self.is_pro else 50
-
 
 class Campaign(db.Model):
     __tablename__ = "campaigns"

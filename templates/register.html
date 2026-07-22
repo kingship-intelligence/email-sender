@@ -35,9 +35,14 @@
               <li>Needs {{ e }}</li>
             {% endfor %}
           </ul>
-        {% else %}
-          <p class="field__hint">8+ characters · one uppercase · one number · one special character</p>
         {% endif %}
+        <ul class="pw-checklist" id="pw-checklist">
+          <li data-check="len">8+ characters</li>
+          <li data-check="upper">One uppercase letter</li>
+          <li data-check="digit">One number</li>
+          <li data-check="special">One special character</li>
+          <li data-check="match">Passwords match</li>
+        </ul>
       </div>
       <div class="field">
         <label for="password2">Confirm password</label>
@@ -47,5 +52,34 @@
     </form>
     <p class="auth-switch">Already have an account? <a href="{{ url_for('login') }}">Sign in</a></p>
   </div>
+  <script>
+    (function () {
+      var pw  = document.getElementById("password");
+      var pw2 = document.getElementById("password2");
+      var list = document.getElementById("pw-checklist");
+      if (!pw || !list) return;
+
+      // Mirrors validate_password() in app.py
+      var checks = {
+        len:     function (v) { return v.length >= 8; },
+        upper:   function (v) { return /[A-Z]/.test(v); },
+        digit:   function (v) { return /\d/.test(v); },
+        special: function (v) { return /[!@#$%^&*()\-_=+[\]{};:',.<>?/\\|`~]/.test(v); },
+        match:   function (v) { return v.length > 0 && v === pw2.value; }
+      };
+
+      function update() {
+        var v = pw.value;
+        list.querySelectorAll("li").forEach(function (li) {
+          var fn = checks[li.dataset.check];
+          li.classList.toggle("ok", !!(fn && fn(v)));
+        });
+      }
+
+      pw.addEventListener("input", update);
+      pw2.addEventListener("input", update);
+      update();
+    })();
+  </script>
 </body>
 </html>

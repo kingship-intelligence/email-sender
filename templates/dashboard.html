@@ -18,6 +18,27 @@
 {% endif %}
 
 {% if campaigns %}
+<div class="stats-row" style="margin-bottom:1.5rem">
+  <div class="stat-card">
+    <div class="stat-card__num">{{ stats.campaigns }}</div>
+    <div class="stat-card__label">Campaigns</div>
+  </div>
+  <div class="stat-card stat-card--green">
+    <div class="stat-card__num">{{ stats.sent_ok }}</div>
+    <div class="stat-card__label">Emails Delivered</div>
+  </div>
+  <div class="stat-card stat-card--red">
+    <div class="stat-card__num">{{ stats.sent_fail }}</div>
+    <div class="stat-card__label">Failed</div>
+  </div>
+  {% if stats.rate is not none %}
+  <div class="stat-card">
+    <div class="stat-card__num">{{ stats.rate }}%</div>
+    <div class="stat-card__label">Delivery Rate</div>
+  </div>
+  {% endif %}
+</div>
+
 <div class="table-wrap">
   <table class="table">
     <thead>

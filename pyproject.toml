@@ -1,7 +1,7 @@
 [project]
-name = "repl-nix-workspace"
+name = "rushmail"
 version = "0.1.0"
-description = "Add your description here"
+description = "Self-hostable bulk email campaign platform built with Flask"
 requires-python = ">=3.11"
 dependencies = [
     "beautifulsoup4>=4.15.0",

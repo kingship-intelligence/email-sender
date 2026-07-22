@@ -229,6 +229,11 @@
 <script>
   const IS_PRO = true;
   const SEND_LIMIT = null;
+  {% if prefill %}
+  const PREFILL = {{ prefill | tojson }};
+  {% else %}
+  const PREFILL = null;
+  {% endif %}
 </script>
 <script src="/static/campaign.js"></script>
 {% endblock %}

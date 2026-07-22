@@ -424,3 +424,18 @@ if (scheduleBtn) {
     }
   });
 }
+
+/* ─── Prefill (e.g. "Resend to failed" from a campaign page) ──── */
+if (typeof PREFILL !== "undefined" && PREFILL) {
+  emails = Array.isArray(PREFILL.emails) ? PREFILL.emails.slice() : [];
+  renderChips();
+  if (PREFILL.subject) document.getElementById("subject-input").value = PREFILL.subject;
+  if (PREFILL.body)    document.getElementById("body-input").value    = PREFILL.body;
+  if (PREFILL.name) {
+    const nameEl = document.getElementById("campaign-name-ai") || document.getElementById("campaign-name-manual");
+    if (nameEl) nameEl.value = PREFILL.name;
+  }
+  if (emails.length) {
+    setExtractStatus("info", `Loaded ${emails.length} recipient${emails.length !== 1 ? "s" : ""} — review the list and continue.`);
+  }
+}

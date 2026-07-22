@@ -648,3 +648,34 @@ a { color: var(--orange); }
 .recipient-limit label { display: flex; align-items: center; flex-wrap: wrap; gap: .4rem; font-weight: 600; font-size: .88rem; color: var(--dark); margin-bottom: .5rem; }
 .recipient-limit__num { width: 70px; padding: .35rem .5rem; border: 1px solid var(--gray-200); border-radius: 6px; font-size: .88rem; text-align: center; }
 .recipient-limit input[type="range"] { width: 100%; accent-color: var(--primary); }
+
+/* ── SMTP provider presets ──────────────────────────────────────── */
+.preset-bar { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin-bottom: 1rem; }
+.preset-bar__label { font-size: .8rem; font-weight: 600; color: var(--gray-600); margin-right: .25rem; }
+.preset-btn.active { background: var(--orange-lt); color: var(--orange-h); border-color: var(--orange-bdr); }
+.preset-help {
+  background: var(--gray-50);
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius);
+  padding: .85rem 1rem;
+  font-size: .85rem;
+  margin-bottom: 1.25rem;
+  line-height: 1.55;
+}
+.preset-help ol { padding-left: 1.2em; margin: .4rem 0 0; display: flex; flex-direction: column; gap: .25rem; }
+.preset-help a { color: var(--orange-h); }
+.preset-help code { background: var(--gray-100); padding: .1em .35em; border-radius: 4px; font-size: .9em; }
+.preset-note { color: var(--gray-600); font-size: .8rem; margin-top: .4rem; }
+
+/* ── Test email row ─────────────────────────────────────────────── */
+.test-email-row { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--gray-200); }
+
+/* ── Page header action buttons ─────────────────────────────────── */
+.page-header__actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+
+/* ── Live password checklist ────────────────────────────────────── */
+.pw-checklist { list-style: none; padding: 0; margin: .5rem 0 0; display: flex; flex-direction: column; gap: .2rem; }
+.pw-checklist li { font-size: .78rem; color: var(--gray-400); padding-left: 1.3em; position: relative; }
+.pw-checklist li::before { content: "○"; position: absolute; left: 0; }
+.pw-checklist li.ok { color: var(--green); }
+.pw-checklist li.ok::before { content: "✓"; }

@@ -7,7 +7,15 @@
     <h1 class="page-title">{{ campaign.name }}</h1>
     <p class="page-sub">{{ campaign.created_at.strftime('%B %d, %Y at %I:%M %p') }}</p>
   </div>
-  <a href="{{ url_for('dashboard') }}" class="btn btn--ghost">← Dashboard</a>
+  <div class="page-header__actions">
+    {% if recipients %}
+    <a href="{{ url_for('campaign_export', campaign_id=campaign.id) }}" class="btn btn--ghost">⬇ Export CSV</a>
+    {% endif %}
+    {% if campaign.sent_fail %}
+    <a href="{{ url_for('campaign_resend_failed', campaign_id=campaign.id) }}" class="btn btn--primary">↻ Resend to {{ campaign.sent_fail }} failed</a>
+    {% endif %}
+    <a href="{{ url_for('dashboard') }}" class="btn btn--ghost">← Dashboard</a>
+  </div>
 </div>
 
 <div class="stats-row">
