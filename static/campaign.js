@@ -16,9 +16,72 @@ function jsonPost(url, body) {
 
 /* ─── State ──────────────────────────────────────────────────── */
 let emails = [];
+let names = {};   // email -> detected/edited display name ("" = none)
 let currentStep = 1;
 let attachmentFiles = [];
 let recipientLimit = 0;
+
+/* ─── Name detection & merge tags ────────────────────────────────
+   Mirrors the server-side logic: guess a person's name from the
+   local part of their email address (john.smith@x.com → John Smith),
+   skipping generic role inboxes like info@ or sales@. */
+const GENERIC_LOCALPARTS = new Set([
+  "info", "contact", "sales", "support", "admin", "hello", "hi", "team",
+  "office", "mail", "email", "enquiries", "inquiries", "inquiry", "help",
+  "hr", "careers", "jobs", "billing", "accounts", "accounting", "marketing",
+  "press", "media", "noreply", "no-reply", "donotreply", "newsletter",
+  "webmaster", "postmaster", "abuse", "security", "service", "services",
+  "orders", "bookings", "reception", "general", "feedback", "notifications",
+  "alerts", "news", "updates", "subscribe", "unsubscribe", "recruiting"
+]);
+
+function deriveNameFromEmail(email) {
+  let local = email.split("@")[0];
+  if (GENERIC_LOCALPARTS.has(local.toLowerCase())) return "";
+  local = local.replace(/([a-z])([A-Z])/g, "$1 $2"); // split camelCase
+  const tokens = [];
+  for (const part of local.toLowerCase().split(/[._\-+\s]+/)) {
+    const p = part.replace(/\d+/g, "");
+    if (p.length >= 2 && /^[a-z]+$/.test(p) && !GENERIC_LOCALPARTS.has(p)) {
+      tokens.push(p.charAt(0).toUpperCase() + p.slice(1));
+    }
+    if (tokens.length === 2) break;
+  }
+  return tokens.join(" ");
+}
+
+/* Fill in a name for any email that doesn't have one yet. */
+function ensureNames() {
+  emails.forEach(email => {
+    if (!(email in names)) names[email] = deriveNameFromEmail(email);
+  });
+}
+
+const MERGE_TAG_RE = /\{\{\s*(name|first_name|firstname|last_name|lastname|email)\s*(?:\|([^}]*))?\}\}/gi;
+
+function hasMergeTags(text) {
+  MERGE_TAG_RE.lastIndex = 0;
+  return MERGE_TAG_RE.test(text);
+}
+
+/* Client-side mirror of the server's personalization, used for the preview. */
+function personalizePreview(text, email) {
+  const full = (names[email] || "").trim();
+  const parts = full.split(/\s+/).filter(Boolean);
+  const values = {
+    email: email,
+    name: full,
+    first_name: parts[0] || "",
+    last_name: parts.length > 1 ? parts[parts.length - 1] : ""
+  };
+  return text.replace(MERGE_TAG_RE, (m, key, fallback) => {
+    key = key.toLowerCase().replace("firstname", "first_name").replace("lastname", "last_name");
+    const val = values[key] || "";
+    if (val) return val;
+    if (fallback && fallback.trim()) return fallback.trim();
+    return key === "email" ? email : "there";
+  });
+}
 
 /* ─── Recipient limit slider ────────────────────────────────────
    Lets the user cap sending to the first N emails in the list
@@ -88,11 +151,15 @@ function renderChips() {
   const nextBtn   = document.getElementById("step1-next");
 
   container.innerHTML = "";
+  ensureNames();
 
   emails.forEach((email, idx) => {
     const chip = document.createElement("div");
     chip.className = "chip";
-    chip.innerHTML = `<span>${email}</span><button class="chip__remove" data-idx="${idx}" title="Remove">×</button>`;
+    const name = names[email] || "";
+    chip.innerHTML = `<span>${email}</span>`
+      + (name ? `<span class="chip__name">${name}</span>` : "")
+      + `<button class="chip__remove" data-idx="${idx}" title="Remove">×</button>`;
     container.appendChild(chip);
   });
 
@@ -138,8 +205,10 @@ function handleFile(file) {
     .then(data => {
       if (data.error) { setExtractStatus("error", data.error); return; }
       emails = data.emails;
+      names = Object.assign({}, data.names || {});
       renderChips();
-      setExtractStatus("success", `Found ${data.total} email addresses.`);
+      const named = emails.filter(e => (names[e] || "").trim()).length;
+      setExtractStatus("success", `Found ${data.total} email addresses${named ? ` — detected ${named} name${named !== 1 ? "s" : ""}` : ""}.`);
     })
     .catch(e => setExtractStatus("error", "Upload failed: " + e.message));
 }
@@ -168,8 +237,10 @@ document.getElementById("scrape-btn").addEventListener("click", () => {
     .then(data => {
       if (data.error) { setExtractStatus("error", data.error); return; }
       emails = data.emails;
+      names = Object.assign({}, data.names || {});
       renderChips();
-      setExtractStatus("success", `Found ${data.total} email addresses.`);
+      const named = emails.filter(e => (names[e] || "").trim()).length;
+      setExtractStatus("success", `Found ${data.total} email addresses${named ? ` — detected ${named} name${named !== 1 ? "s" : ""}` : ""}.`);
     })
     .catch(e => setExtractStatus("error", "Scrape failed: " + e.message));
 });
@@ -187,6 +258,7 @@ document.querySelectorAll(".tab").forEach(tab => {
 /* ─── Clear ───────────────────────────────────────────────────── */
 document.getElementById("clear-emails-btn").addEventListener("click", () => {
   emails = [];
+  names = {};
   renderChips();
   setExtractStatus("hidden", "");
 });
@@ -224,6 +296,83 @@ function setGenStatus(type, msg) {
   if (!el) return;
   el.className = "status-msg " + type;
   el.textContent = msg;
+}
+
+/* ─── Personalization UI ──────────────────────────────────────── */
+const subjectInput = document.getElementById("subject-input");
+
+/* Track where the user last typed so tag buttons insert in the right place. */
+let lastFocusedField = "body";
+if (subjectInput) {
+  subjectInput.addEventListener("focus", () => { lastFocusedField = "subject"; });
+}
+if (typeof bodyQuill !== "undefined") {
+  bodyQuill.on("selection-change", range => { if (range) lastFocusedField = "body"; });
+}
+
+function insertMergeTag(tag) {
+  if (lastFocusedField === "subject" && subjectInput) {
+    const start = subjectInput.selectionStart ?? subjectInput.value.length;
+    const end   = subjectInput.selectionEnd ?? start;
+    subjectInput.value = subjectInput.value.slice(0, start) + tag + subjectInput.value.slice(end);
+    subjectInput.focus();
+    subjectInput.setSelectionRange(start + tag.length, start + tag.length);
+  } else {
+    const range = bodyQuill.getSelection(true);
+    bodyQuill.insertText(range.index, tag, "user");
+    bodyQuill.setSelection(range.index + tag.length);
+  }
+}
+
+document.querySelectorAll(".tag-btn").forEach(btn => {
+  // mousedown, not click, so the editor/input doesn't lose focus first
+  btn.addEventListener("mousedown", e => e.preventDefault());
+  btn.addEventListener("click", () => insertMergeTag(btn.dataset.tag));
+});
+
+const namesEditor    = document.getElementById("names-editor");
+const toggleNamesBtn = document.getElementById("toggle-names-btn");
+
+function renderNamesEditor() {
+  if (!namesEditor) return;
+  namesEditor.innerHTML = "";
+  ensureNames();
+  const list = getSelectedEmails();
+  if (list.length === 0) {
+    namesEditor.innerHTML = '<p class="muted small">No recipients yet — extract emails in step 1 first.</p>';
+    return;
+  }
+  list.forEach(email => {
+    const row = document.createElement("div");
+    row.className = "names-row";
+    const label = document.createElement("span");
+    label.className = "names-row__email";
+    label.textContent = email;
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "names-row__input";
+    input.placeholder = "No name detected";
+    input.value = names[email] || "";
+    input.addEventListener("input", () => { names[email] = input.value; });
+    input.addEventListener("change", renderChips);
+    row.appendChild(label);
+    row.appendChild(input);
+    namesEditor.appendChild(row);
+  });
+}
+
+if (toggleNamesBtn) {
+  toggleNamesBtn.addEventListener("click", () => {
+    const open = namesEditor.style.display !== "none";
+    if (open) {
+      namesEditor.style.display = "none";
+      toggleNamesBtn.textContent = "Review & edit detected names ▾";
+    } else {
+      renderNamesEditor();
+      namesEditor.style.display = "";
+      toggleNamesBtn.textContent = "Hide detected names ▴";
+    }
+  });
 }
 
 /* ─── Attachments ─────────────────────────────────────────────── */
@@ -273,8 +422,23 @@ document.getElementById("step2-next").addEventListener("click", () => {
   const selectedEmails = getSelectedEmails();
   document.getElementById("review-count").textContent   = selectedEmails.length + " recipient" + (selectedEmails.length !== 1 ? "s" : "")
     + (selectedEmails.length !== emails.length ? ` (of ${emails.length} found)` : "");
-  document.getElementById("review-subject").textContent = subject;
-  document.getElementById("review-body").innerHTML      = bodyHtml;
+
+  // Show the preview personalized for the first recipient when merge tags are used.
+  const personalized = selectedEmails.length > 0 && (hasMergeTags(subject) || hasMergeTags(bodyHtml));
+  const previewEmail = selectedEmails[0];
+  const note = document.getElementById("review-personalized-note");
+  if (personalized) {
+    document.getElementById("review-subject").textContent = personalizePreview(subject, previewEmail);
+    document.getElementById("review-body").innerHTML      = personalizePreview(bodyHtml, previewEmail);
+    if (note) {
+      note.textContent = `Personalized preview for ${previewEmail} — every recipient gets their own version.`;
+      note.style.display = "";
+    }
+  } else {
+    document.getElementById("review-subject").textContent = subject;
+    document.getElementById("review-body").innerHTML      = bodyHtml;
+    if (note) note.style.display = "none";
+  }
 
   const attItem = document.getElementById("review-attachments-item");
   if (attachmentFiles.length > 0) {
@@ -330,6 +494,7 @@ if (sendBtn) {
     try {
       const fd = new FormData();
       fd.append("emails", JSON.stringify(selectedEmails));
+      fd.append("names", JSON.stringify(names));
       fd.append("subject", subject);
       fd.append("body", body);
       fd.append("name", name);
@@ -409,6 +574,7 @@ if (scheduleBtn) {
         subject,
         body,
         emails: selectedEmails,
+        names,
         frequency,
         first_run: firstRun
       });

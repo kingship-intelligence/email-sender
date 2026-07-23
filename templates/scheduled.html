@@ -26,6 +26,9 @@
       <div class="field">
         <label class="field__label">Email Subject</label>
         <input type="text" name="subject" class="input" placeholder="Your subject line" required />
+        {% raw %}
+        <p class="field__hint">Tip: use {{first_name}}, {{name}}, or {{email}} in the subject or body to personalize each email. Names are auto-detected from addresses, or set them per line below.</p>
+        {% endraw %}
       </div>
 
       <div class="field">
@@ -35,8 +38,8 @@
       </div>
 
       <div class="field">
-        <label class="field__label">Recipients <small class="muted">(one email per line)</small></label>
-        <textarea name="emails" class="input input--ta" rows="5" placeholder="alice@example.com&#10;bob@example.com" required></textarea>
+        <label class="field__label">Recipients <small class="muted">(one per line — optionally with a name)</small></label>
+        <textarea name="emails" class="input input--ta" rows="5" placeholder="alice@example.com&#10;Bob Jones &lt;bob@example.com&gt;" required></textarea>
       </div>
 
       <div class="field">

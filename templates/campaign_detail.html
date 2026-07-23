@@ -53,6 +53,7 @@
       <thead>
         <tr>
           <th>Email</th>
+          <th>Name</th>
           <th>Status</th>
           <th>Sent At</th>
           <th>Note</th>
@@ -62,6 +63,7 @@
         {% for r in recipients %}
         <tr>
           <td>{{ r.email }}</td>
+          <td>{{ r.name or '—' }}</td>
           <td>
             {% if r.status == 'sent' %}
               <span class="badge badge--green">Sent</span>

@@ -114,6 +114,30 @@
       <textarea id="body-input" style="display:none"></textarea>
     </div>
 
+    <!-- Personalization -->
+    {% raw %}
+    <div class="field personalize-box" style="margin-top:1.25rem">
+      <label>Personalize with names <span class="muted">(optional)</span></label>
+      <p class="muted small" style="margin:.25rem 0 .6rem">
+        We auto-detect each recipient's name from their email address
+        (john.smith@acme.com &rarr; John Smith). Click a tag to insert it into your
+        subject or body — every recipient gets their own version, e.g.
+        “Hi {{first_name}},” becomes “Hi John,”. If no name is found we say “there”
+        instead (or use {{first_name|friend}} to pick your own fallback).
+      </p>
+      <div class="tag-btn-row">
+        <button type="button" class="btn btn--sm btn--ghost tag-btn" data-tag="{{first_name}}">+ First name</button>
+        <button type="button" class="btn btn--sm btn--ghost tag-btn" data-tag="{{name}}">+ Full name</button>
+        <button type="button" class="btn btn--sm btn--ghost tag-btn" data-tag="{{last_name}}">+ Last name</button>
+        <button type="button" class="btn btn--sm btn--ghost tag-btn" data-tag="{{email}}">+ Email address</button>
+      </div>
+      <button type="button" class="btn-link" id="toggle-names-btn" style="margin-top:.6rem">
+        Review &amp; edit detected names ▾
+      </button>
+      <div id="names-editor" class="names-editor" style="display:none"></div>
+    </div>
+    {% endraw %}
+
     <!-- Attachments -->
     <div class="field" style="margin-top:1.25rem">
       <label>Attachments <span class="muted">(optional)</span></label>
@@ -148,6 +172,7 @@
       </div>
       <div class="review-item full">
         <span class="review-label">Preview</span>
+        <p class="muted small" id="review-personalized-note" style="display:none;margin:.15rem 0 .4rem"></p>
         <div class="review-body" id="review-body">—</div>
       </div>
       <div class="review-item" id="review-attachments-item" style="display:none">

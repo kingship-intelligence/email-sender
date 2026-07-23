@@ -116,6 +116,81 @@ def decrypt_password(token: str) -> str:
     return get_fernet().decrypt(token.encode()).decode()
 
 
+# ── Name detection & personalization ─────────────────────────────────────────
+# Local parts that belong to shared/role inboxes, not people — no name is
+# derived for these (e.g. info@acme.com should not become "Info").
+GENERIC_LOCALPARTS = {
+    "info", "contact", "sales", "support", "admin", "hello", "hi", "team",
+    "office", "mail", "email", "enquiries", "inquiries", "inquiry", "help",
+    "hr", "careers", "jobs", "billing", "accounts", "accounting", "marketing",
+    "press", "media", "noreply", "no-reply", "donotreply", "newsletter",
+    "webmaster", "postmaster", "abuse", "security", "service", "services",
+    "orders", "bookings", "reception", "general", "feedback", "notifications",
+    "alerts", "news", "updates", "subscribe", "unsubscribe", "recruiting",
+}
+
+
+def derive_name_from_email(email: str) -> str:
+    """Best-effort guess of a person's name from an email address.
+
+    "john.smith@x.com"  -> "John Smith"
+    "JaneDoe99@x.com"   -> "Jane Doe"
+    "info@x.com"        -> ""  (generic inbox, no name)
+    """
+    local = email.split("@", 1)[0]
+    if local.lower() in GENERIC_LOCALPARTS:
+        return ""
+    # Split camelCase before lowercasing so "JohnSmith" -> "John Smith"
+    local = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", local)
+    tokens = []
+    for part in re.split(r"[._\-+\s]+", local.lower()):
+        part = re.sub(r"\d+", "", part)
+        if len(part) >= 2 and part.isalpha() and part not in GENERIC_LOCALPARTS:
+            tokens.append(part.capitalize())
+        if len(tokens) == 2:
+            break
+    return " ".join(tokens)
+
+
+_MERGE_TAG_RE = re.compile(
+    r"\{\{\s*(name|first_name|firstname|last_name|lastname|email)\s*(?:\|([^}]*))?\}\}",
+    re.IGNORECASE,
+)
+
+
+def personalize_text(text: str, email: str, full_name: str) -> str:
+    """Replace merge tags like {{name}}, {{first_name}}, {{email}} with the
+    recipient's values. An optional fallback can be given with a pipe, e.g.
+    {{first_name|friend}}. Name tags with no known name and no fallback
+    default to "there" so greetings still read naturally.
+    """
+    parts = (full_name or "").split()
+    values = {
+        "email": email,
+        "name": (full_name or "").strip(),
+        "first_name": parts[0] if parts else "",
+        "last_name": parts[-1] if len(parts) > 1 else "",
+    }
+
+    def repl(m):
+        key = m.group(1).lower().replace("firstname", "first_name").replace("lastname", "last_name")
+        fallback = (m.group(2) or "").strip()
+        val = values.get(key, "")
+        if val:
+            return val
+        if fallback:
+            return fallback
+        return email if key == "email" else "there"
+
+    return _MERGE_TAG_RE.sub(repl, text)
+
+
+def resolve_recipient_name(email: str, names_map: dict) -> str:
+    """User-provided name wins; otherwise derive one from the address."""
+    provided = (names_map.get(email) or "").strip() if isinstance(names_map, dict) else ""
+    return provided or derive_name_from_email(email)
+
+
 def extract_emails(text: str) -> list[str]:
     found = EMAIL_RE.findall(text)
     seen = set()
@@ -518,10 +593,11 @@ def campaign_export(campaign_id):
     recipients = CampaignRecipient.query.filter_by(campaign_id=campaign.id).all()
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(["email", "status", "sent_at", "error"])
+    writer.writerow(["email", "name", "status", "sent_at", "error"])
     for r in recipients:
         writer.writerow([
             r.email,
+            r.name or "",
             r.status,
             r.sent_at.isoformat() if r.sent_at else "",
             r.error or "",
@@ -592,7 +668,8 @@ def extract():
         return jsonify({"error": f"Could not parse file: {e}"}), 400
 
     emails = extract_emails(text)
-    return jsonify({"emails": emails, "total": len(emails)})
+    names = {e: derive_name_from_email(e) for e in emails}
+    return jsonify({"emails": emails, "names": names, "total": len(emails)})
 
 
 def _hostname_is_safe(hostname: str) -> bool:
@@ -676,7 +753,8 @@ def extract_url():
         return jsonify({"error": f"Could not fetch URL: {e}"}), 400
 
     emails = extract_emails(text)
-    return jsonify({"emails": emails, "total": len(emails)})
+    names = {e: derive_name_from_email(e) for e in emails}
+    return jsonify({"emails": emails, "names": names, "total": len(emails)})
 
 
 @app.route("/generate", methods=["POST"])
@@ -727,6 +805,7 @@ def generate():
 def send_bulk():
     # Accept multipart/form-data (with optional file attachments)
     emails_raw = request.form.get("emails", "[]")
+    names_raw = request.form.get("names", "{}")
     subject = request.form.get("subject", "").strip()
     body = request.form.get("body", "").strip()
     campaign_name = (request.form.get("name", "Campaign") or "Campaign").strip()
@@ -735,6 +814,13 @@ def send_bulk():
         emails = json.loads(emails_raw)
     except Exception:
         return jsonify({"error": "Invalid emails payload."}), 400
+
+    try:
+        names_map = json.loads(names_raw)
+        if not isinstance(names_map, dict):
+            names_map = {}
+    except Exception:
+        names_map = {}
 
     body_text = re.sub(r"<[^>]+>", "", body).strip()
     if not emails or not subject or not body_text:
@@ -771,7 +857,11 @@ def send_bulk():
 
     recipient_rows = []
     for email in emails:
-        r = CampaignRecipient(campaign_id=campaign.id, email=email)
+        r = CampaignRecipient(
+            campaign_id=campaign.id,
+            email=email,
+            name=resolve_recipient_name(email, names_map) or None,
+        )
         db.session.add(r)
         recipient_rows.append(r)
     db.session.flush()
@@ -779,7 +869,7 @@ def send_bulk():
     # Capture all data we need from ORM objects as plain Python values
     # BEFORE commit() expires them — avoids DetachedInstanceError in the generator.
     campaign_id = campaign.id
-    recipient_data = [{"id": r.id, "email": r.email} for r in recipient_rows]
+    recipient_data = [{"id": r.id, "email": r.email, "name": r.name or ""} for r in recipient_rows]
     db.session.commit()
 
     def stream():
@@ -813,12 +903,13 @@ def send_bulk():
         for rd in recipient_data:
             r_email = rd["email"]
             r_id = rd["id"]
+            r_name = rd["name"]
             try:
                 msg = MIMEMultipart("mixed")
                 msg["From"] = from_addr
                 msg["To"] = r_email
-                msg["Subject"] = subject
-                msg.attach(MIMEText(body, "html"))
+                msg["Subject"] = personalize_text(subject, r_email, r_name)
+                msg.attach(MIMEText(personalize_text(body, r_email, r_name), "html"))
 
                 for att_name, att_data, att_mime in attachments:
                     maintype, subtype = att_mime.split("/", 1) if "/" in att_mime else ("application", "octet-stream")
@@ -1041,6 +1132,7 @@ def _fire_scheduled_campaign(sc_id: int, smtp_cfg: dict):
         if not sc:
             return
         emails = sc.emails
+        names_map = sc.names
         subject = sc.subject
         body = sc.body
         from_addr = smtp_cfg["from"] or smtp_cfg["user"]
@@ -1056,11 +1148,12 @@ def _fire_scheduled_campaign(sc_id: int, smtp_cfg: dict):
             server.login(smtp_cfg["user"], smtp_cfg["pass"])
             for addr in emails:
                 try:
+                    name = resolve_recipient_name(addr, names_map)
                     msg = MIMEMultipart("mixed")
                     msg["From"] = from_addr
                     msg["To"] = addr
-                    msg["Subject"] = subject
-                    msg.attach(MIMEText(body, "html"))
+                    msg["Subject"] = personalize_text(subject, addr, name)
+                    msg.attach(MIMEText(personalize_text(body, addr, name), "html"))
                     server.sendmail(from_addr, addr, msg.as_string())
                     ok += 1
                 except Exception:
@@ -1181,8 +1274,22 @@ def scheduled():
         first_run = request.form.get("first_run", "").strip()
         frequency = request.form.get("frequency", "weekly").strip().lower()
 
-        emails_list = [e.strip().lower() for e in emails_raw.splitlines() if e.strip()]
-        emails_list = list(dict.fromkeys(emails_list))  # deduplicate
+        # Each line is either "email@example.com" or "Jane Doe <email@example.com>"
+        emails_list = []
+        names_map = {}
+        for line in emails_raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            m = re.match(r"^(.*?)<([^>]+)>\s*$", line)
+            if m:
+                recip_name, recip_email = m.group(1).strip(), m.group(2).strip().lower()
+            else:
+                recip_name, recip_email = "", line.lower()
+            if recip_email not in emails_list:
+                emails_list.append(recip_email)
+            if recip_name:
+                names_map[recip_email] = recip_name
 
         errors, next_run_at = _validate_schedule_input(name, subject, body, emails_list, first_run, frequency)
 
@@ -1196,6 +1303,7 @@ def scheduled():
                 subject=subject,
                 body=body,
                 emails_json=json.dumps(emails_list),
+                names_json=json.dumps(names_map),
                 next_run_at=next_run_at,
                 frequency=frequency,
             )
@@ -1223,6 +1331,15 @@ def campaign_schedule():
     emails_list = [str(e).strip().lower() for e in emails_list if str(e).strip()]
     emails_list = list(dict.fromkeys(emails_list))
 
+    names_map = data.get("names") or {}
+    if not isinstance(names_map, dict):
+        names_map = {}
+    names_map = {
+        str(k).strip().lower(): str(v).strip()
+        for k, v in names_map.items()
+        if str(k).strip() and str(v).strip()
+    }
+
     errors, next_run_at = _validate_schedule_input(name, subject, body, emails_list, first_run, frequency)
     if errors:
         return jsonify({"error": " ".join(errors)}), 400
@@ -1233,6 +1350,7 @@ def campaign_schedule():
         subject=subject,
         body=body,
         emails_json=json.dumps(emails_list),
+        names_json=json.dumps(names_map),
         next_run_at=next_run_at,
         frequency=frequency,
     )
@@ -1293,6 +1411,18 @@ with app.app_context():
             if "frequency" not in cols:
                 db.session.execute(text(
                     "ALTER TABLE scheduled_campaigns ADD COLUMN frequency VARCHAR(20) NOT NULL DEFAULT 'weekly'"
+                ))
+                db.session.commit()
+            if "names_json" not in cols:
+                db.session.execute(text(
+                    "ALTER TABLE scheduled_campaigns ADD COLUMN names_json TEXT"
+                ))
+                db.session.commit()
+        if "campaign_recipients" in inspector.get_table_names():
+            rec_cols = [c["name"] for c in inspector.get_columns("campaign_recipients")]
+            if "name" not in rec_cols:
+                db.session.execute(text(
+                    "ALTER TABLE campaign_recipients ADD COLUMN name VARCHAR(255)"
                 ))
                 db.session.commit()
         if "users" in inspector.get_table_names():

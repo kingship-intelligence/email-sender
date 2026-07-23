@@ -380,6 +380,65 @@ textarea { resize: vertical; }
 }
 .chip__remove:hover { color: var(--red); }
 
+.chip__name {
+  background: var(--orange-lt);
+  color: var(--orange, #f97316);
+  border-radius: 999px;
+  padding: 0 .45rem;
+  font-size: .7rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* ── Personalization ─────────────────────────────────────────── */
+.personalize-box {
+  background: var(--gray-50, #f9fafb);
+  border: 1px solid var(--gray-200);
+  border-radius: 10px;
+  padding: .9rem 1rem;
+}
+
+.tag-btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .4rem;
+}
+
+.names-editor {
+  margin-top: .6rem;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--gray-200);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.names-row {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  padding: .35rem .6rem;
+  border-bottom: 1px solid var(--gray-100, #f3f4f6);
+}
+.names-row:last-child { border-bottom: none; }
+
+.names-row__email {
+  flex: 1;
+  font-size: .8rem;
+  color: var(--gray-600, #4b5563);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.names-row__input {
+  flex: 1;
+  border: 1px solid var(--gray-200);
+  border-radius: 6px;
+  padding: .3rem .5rem;
+  font-size: .8rem;
+}
+
 /* ── AI box ──────────────────────────────────────────────────── */
 .ai-box {
   background: var(--orange-lt);

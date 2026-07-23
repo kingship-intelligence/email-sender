@@ -56,6 +56,7 @@ class CampaignRecipient(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     campaign_id = db.Column(db.Integer, db.ForeignKey("campaigns.id"), nullable=False)
     email = db.Column(db.String(255), nullable=False)
+    name = db.Column(db.String(255))
     status = db.Column(db.String(20), default="pending")
     error = db.Column(db.Text)
     sent_at = db.Column(db.DateTime)
@@ -70,6 +71,7 @@ class ScheduledCampaign(db.Model):
     subject = db.Column(db.String(500), nullable=False)
     body = db.Column(db.Text, nullable=False)
     emails_json = db.Column(db.Text, nullable=False)
+    names_json = db.Column(db.Text)
     next_run_at = db.Column(db.DateTime, nullable=False)
     last_run_at = db.Column(db.DateTime)
     active = db.Column(db.Boolean, default=True)
@@ -82,3 +84,12 @@ class ScheduledCampaign(db.Model):
     def emails(self):
         import json
         return json.loads(self.emails_json or "[]")
+
+    @property
+    def names(self):
+        import json
+        try:
+            data = json.loads(self.names_json or "{}")
+            return data if isinstance(data, dict) else {}
+        except ValueError:
+            return {}
