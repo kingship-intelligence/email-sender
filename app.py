@@ -347,7 +347,7 @@ def subscription_required(f):
 def index():
     if current_user.is_authenticated:
         return redirect(url_for("dashboard"))
-    return redirect(url_for("login"))
+    return render_template("homepage.html")
 
 
 @app.route("/login", methods=["GET", "POST"])

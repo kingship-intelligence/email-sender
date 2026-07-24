@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RushMail — Bulk email campaigns, personalized</title>
+  <meta name="description" content="RushMail helps teams extract recipients, personalize every message, and send or schedule campaigns through your own SMTP. A product of Kingship Intelligence." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Syne:wght@600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body class="hp">
+
+  <header class="hp-header" id="site-header">
+    <div class="hp-header__inner">
+      <a href="{{ url_for('index') }}" class="hp-brand" aria-label="RushMail home">
+        <img src="{{ url_for('static', filename='img/logo.png') }}" alt="" class="hp-brand__logo" />
+        <span class="hp-brand__name">Rush<span>Mail</span></span>
+      </a>
+      <nav class="hp-nav" aria-label="Primary">
+        <a href="#features">Features</a>
+        <a href="#how">How it works</a>
+        <a href="#demo">Book a demo</a>
+      </nav>
+      <div class="hp-header__actions">
+        <a href="{{ url_for('login') }}" class="hp-link">Sign in</a>
+        <a href="#demo" class="btn btn--primary hp-btn">Book a demo</a>
+      </div>
+      <button type="button" class="hp-menu-btn" id="hp-menu-btn" aria-label="Open menu" aria-expanded="false">
+        <span></span><span></span><span></span>
+      </button>
+    </div>
+    <div class="hp-mobile-nav" id="hp-mobile-nav" hidden>
+      <a href="#features">Features</a>
+      <a href="#how">How it works</a>
+      <a href="#demo">Book a demo</a>
+      <a href="{{ url_for('login') }}">Sign in</a>
+      <a href="{{ url_for('register') }}" class="btn btn--primary btn--full">Get started</a>
+    </div>
+  </header>
+
+  <main>
+    <section class="hp-hero">
+      <div class="hp-hero__bg" aria-hidden="true"></div>
+      <div class="hp-hero__content">
+        <p class="hp-hero__brand">RushMail</p>
+        <h1 class="hp-hero__title">Send campaigns that feel written for each person.</h1>
+        <p class="hp-hero__sub">Extract recipients, personalize with names, and send or schedule through your own SMTP — built for teams who want outreach without the agency overhead.</p>
+        <div class="hp-hero__ctas">
+          <a href="#demo" class="btn btn--primary hp-btn hp-btn--lg">Book a demo today</a>
+          <a href="{{ url_for('register') }}" class="btn btn--ghost hp-btn hp-btn--lg hp-btn--ghost">Get started</a>
+        </div>
+      </div>
+      <div class="hp-hero__stage" aria-hidden="true">
+        <div class="hp-stage">
+          <div class="hp-stage__bar">
+            <span></span><span></span><span></span>
+            <em>New campaign</em>
+          </div>
+          <div class="hp-stage__chips">
+            <span class="hp-stage__chip">jordan.lee@acme.com <b>Jordan Lee</b></span>
+            <span class="hp-stage__chip">priya.nair@acme.com <b>Priya Nair</b></span>
+            <span class="hp-stage__chip">sam.ortiz@acme.com <b>Sam Ortiz</b></span>
+          </div>
+          <div class="hp-stage__mail">
+            <div class="hp-stage__label">Subject</div>
+            <p class="hp-stage__subject">Jordan, a quick note for your team</p>
+            <div class="hp-stage__label">Body</div>
+            <p class="hp-stage__body">Hi {% raw %}{{first_name}}{% endraw %},<br/>We noticed Acme is scaling outreach — RushMail can personalize every send without leaving your SMTP.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="hp-section" id="features">
+      <div class="hp-section__inner">
+        <h2 class="hp-section__title">Everything you need to run outreach</h2>
+        <p class="hp-section__sub">From list building to delivery tracking — one place to launch personalized campaigns.</p>
+        <div class="hp-features">
+          <article class="hp-feature">
+            <h3>Recipient extraction</h3>
+            <p>Pull emails from CSV, Excel, PDF, Word, or a webpage — deduplicated and ready to send.</p>
+          </article>
+          <article class="hp-feature">
+            <h3>Name personalization</h3>
+            <p>Detect names from addresses and use merge tags like {% raw %}{{first_name}}{% endraw %} so every message reads as one-to-one.</p>
+          </article>
+          <article class="hp-feature">
+            <h3>AI-assisted copy</h3>
+            <p>Describe the campaign in a sentence and generate a subject and body you can edit before sending.</p>
+          </article>
+          <article class="hp-feature">
+            <h3>Your SMTP, your control</h3>
+            <p>Send through the mail server you already trust. Credentials stay encrypted at rest.</p>
+          </article>
+          <article class="hp-feature">
+            <h3>Schedule &amp; track</h3>
+            <p>Run once, daily, weekly, or monthly — and see per-recipient delivery status in your dashboard.</p>
+          </article>
+          <article class="hp-feature">
+            <h3>Built for teams</h3>
+            <p>Accounts, verification, and subscriptions included so you can roll RushMail out without a custom build.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="hp-section hp-section--alt" id="how">
+      <div class="hp-section__inner">
+        <h2 class="hp-section__title">How RushMail works</h2>
+        <p class="hp-section__sub">Three steps from a file of contacts to a personalized campaign in flight.</p>
+        <ol class="hp-steps">
+          <li>
+            <span class="hp-steps__num">1</span>
+            <div>
+              <h3>Extract your list</h3>
+              <p>Upload a file or paste a URL. We find every address and guess names where we can.</p>
+            </div>
+          </li>
+          <li>
+            <span class="hp-steps__num">2</span>
+            <div>
+              <h3>Compose once</h3>
+              <p>Write or generate the email, drop in merge tags, attach files if you need them.</p>
+            </div>
+          </li>
+          <li>
+            <span class="hp-steps__num">3</span>
+            <div>
+              <h3>Send or schedule</h3>
+              <p>Ship immediately with live progress, or set a recurring schedule and walk away.</p>
+            </div>
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="hp-demo" id="demo">
+      <div class="hp-demo__inner">
+        <h2 class="hp-demo__title">Book a demo today</h2>
+        <p class="hp-demo__sub">See RushMail with your own list and SMTP. We’ll walk you through extraction, personalization, and sending — usually in under 30 minutes.</p>
+        <div class="hp-demo__ctas">
+          <a
+            class="btn btn--primary hp-btn hp-btn--lg"
+            href="mailto:kingshipintelligence@gmail.com?subject=RushMail%20demo%20request&body=Hi%20Kingship%20Intelligence%2C%0A%0AI%27d%20like%20to%20book%20a%20RushMail%20demo.%0A%0AName%3A%0ACompany%3A%0APreferred%20times%3A%0A"
+          >Book a demo today</a>
+          <a class="btn btn--ghost hp-btn hp-btn--lg hp-btn--on-dark" href="https://kingshipintelligence.com/" target="_blank" rel="noopener noreferrer">Visit Kingship Intelligence</a>
+        </div>
+        <p class="hp-demo__note">Prefer email? Reach us at <a href="mailto:kingshipintelligence@gmail.com">kingshipintelligence@gmail.com</a></p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="hp-footer">
+    <div class="hp-footer__inner">
+      <div class="hp-footer__brand">
+        <div class="hp-brand">
+          <img src="{{ url_for('static', filename='img/logo.png') }}" alt="" class="hp-brand__logo" />
+          <span class="hp-brand__name">Rush<span>Mail</span></span>
+        </div>
+        <p class="hp-footer__owned">Owned and operated by <a href="https://kingshipintelligence.com/" target="_blank" rel="noopener noreferrer">Kingship Intelligence</a>.</p>
+      </div>
+      <div class="hp-footer__cols">
+        <div>
+          <h4>Product</h4>
+          <a href="#features">Features</a>
+          <a href="#how">How it works</a>
+          <a href="#demo">Book a demo</a>
+        </div>
+        <div>
+          <h4>Account</h4>
+          <a href="{{ url_for('login') }}">Sign in</a>
+          <a href="{{ url_for('register') }}">Create account</a>
+        </div>
+        <div>
+          <h4>Company</h4>
+          <a href="https://kingshipintelligence.com/" target="_blank" rel="noopener noreferrer">Kingship Intelligence</a>
+          <a href="mailto:kingshipintelligence@gmail.com">Contact</a>
+        </div>
+      </div>
+    </div>
+    <div class="hp-footer__bottom">
+      <p>&copy; <span id="hp-year"></span> RushMail. A product of Kingship Intelligence.</p>
+    </div>
+  </footer>
+
+  <script>
+    (function () {
+      var year = document.getElementById("hp-year");
+      if (year) year.textContent = new Date().getFullYear();
+
+      var header = document.getElementById("site-header");
+      var onScroll = function () {
+        header.classList.toggle("hp-header--scrolled", window.scrollY > 12);
+      };
+      window.addEventListener("scroll", onScroll, { passive: true });
+      onScroll();
+
+      var btn = document.getElementById("hp-menu-btn");
+      var nav = document.getElementById("hp-mobile-nav");
+      if (btn && nav) {
+        btn.addEventListener("click", function () {
+          var open = nav.hasAttribute("hidden");
+          if (open) nav.removeAttribute("hidden");
+          else nav.setAttribute("hidden", "");
+          btn.setAttribute("aria-expanded", open ? "true" : "false");
+        });
+        nav.querySelectorAll("a").forEach(function (a) {
+          a.addEventListener("click", function () {
+            nav.setAttribute("hidden", "");
+            btn.setAttribute("aria-expanded", "false");
+          });
+        });
+      }
+    })();
+  </script>
+</body>
+</html>
