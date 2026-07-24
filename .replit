@@ -42,3 +42,10 @@ run = ["gunicorn", "--bind=0.0.0.0:5000", "--reuse-port", "--workers=2", "app:ap
 [postMerge]
 path = "scripts/post-merge.sh"
 timeoutMs = 120000
+
+[userenv]
+
+[userenv.shared]
+AUTH_SMTP_HOST = "smtp.gmail.com"
+AUTH_SMTP_PORT = "587"
+AUTH_SMTP_TLS = "true"
