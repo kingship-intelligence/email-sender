@@ -31,7 +31,7 @@
         <span></span><span></span><span></span>
       </button>
     </div>
-    <div class="hp-mobile-nav" id="hp-mobile-nav" hidden>
+    <div class="hp-mobile-nav" id="hp-mobile-nav">
       <a href="#features">Features</a>
       <a href="#how">How it works</a>
       <a href="#demo">Book a demo</a>
@@ -201,14 +201,13 @@
       var nav = document.getElementById("hp-mobile-nav");
       if (btn && nav) {
         btn.addEventListener("click", function () {
-          var open = nav.hasAttribute("hidden");
-          if (open) nav.removeAttribute("hidden");
-          else nav.setAttribute("hidden", "");
+          var open = !nav.classList.contains("is-open");
+          nav.classList.toggle("is-open", open);
           btn.setAttribute("aria-expanded", open ? "true" : "false");
         });
         nav.querySelectorAll("a").forEach(function (a) {
           a.addEventListener("click", function () {
-            nav.setAttribute("hidden", "");
+            nav.classList.remove("is-open");
             btn.setAttribute("aria-expanded", "false");
           });
         });

@@ -840,12 +840,15 @@ a { color: var(--orange); }
   background: var(--dark);
 }
 .hp-mobile-nav {
-  display: flex;
+  display: none;
   flex-direction: column;
   gap: .75rem;
   padding: .5rem 1.25rem 1.25rem;
   border-top: 1px solid var(--gray-200);
   background: #ffffff;
+}
+.hp-mobile-nav.is-open {
+  display: flex;
 }
 .hp-mobile-nav a {
   color: var(--gray-700);
