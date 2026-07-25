@@ -209,9 +209,12 @@ def load_user(user_id):
 
 
 def get_domain():
-    domain = os.environ.get("REPLIT_DEV_DOMAIN", "")
+    # Prefer an explicitly configured domain (e.g. custom domain in prod).
+    # Otherwise fall back to the host the request actually arrived on —
+    # this is correct for both the Replit dev tunnel and the deployed app.
+    domain = os.environ.get("APP_DOMAIN", "")
     if domain:
-        return f"https://{domain}"
+        return domain.rstrip("/")
     return request.host_url.rstrip("/")
 
 
