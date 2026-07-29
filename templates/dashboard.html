@@ -24,19 +24,21 @@
     <div class="stat-card__label">Campaigns</div>
   </div>
   <div class="stat-card stat-card--green">
-    <div class="stat-card__num">{{ stats.sent_ok }}</div>
+    <div class="stat-card__num" id="dashboard-sent-ok">{{ stats.sent_ok }}</div>
     <div class="stat-card__label">Emails Delivered</div>
   </div>
   <div class="stat-card stat-card--red">
-    <div class="stat-card__num">{{ stats.sent_fail }}</div>
+    <div class="stat-card__num" id="dashboard-sent-fail">{{ stats.sent_fail }}</div>
     <div class="stat-card__label">Failed</div>
   </div>
-  {% if stats.rate is not none %}
   <div class="stat-card">
-    <div class="stat-card__num">{{ stats.rate }}%</div>
+    <div class="stat-card__num" id="dashboard-delivery-rate">{{ (stats.delivery_rate ~ '%') if stats.delivery_rate is not none else '—' }}</div>
     <div class="stat-card__label">Delivery Rate</div>
   </div>
-  {% endif %}
+  <div class="stat-card stat-card--red">
+    <div class="stat-card__num" id="dashboard-failure-rate">{{ (stats.failure_rate ~ '%') if stats.failure_rate is not none else '—' }}</div>
+    <div class="stat-card__label">Failure Rate</div>
+  </div>
 </div>
 
 <div class="table-wrap">
@@ -46,6 +48,7 @@
         <th>Campaign</th>
         <th>Created</th>
         <th>Recipients</th>
+        <th>Status</th>
         <th>Delivered</th>
         <th>Failed</th>
         <th></th>
@@ -53,13 +56,26 @@
     </thead>
     <tbody>
       {% for c in campaigns %}
-      <tr>
+      {% set metrics = campaign_metrics[c.id] %}
+      <tr data-campaign-row data-campaign-id="{{ c.id }}" data-status="{{ c.status }}" data-total="{{ c.total }}" data-sent="{{ metrics.sent }}" data-failed="{{ metrics.failed }}">
         <td><strong>{{ c.name }}</strong><br><small class="muted">{{ c.subject }}</small></td>
         <td>{{ c.created_at.strftime('%b %d, %Y') }}</td>
         <td>{{ c.total }}</td>
-        <td><span class="badge badge--green">{{ c.sent_ok }}</span></td>
-        <td>{% if c.sent_fail %}<span class="badge badge--red">{{ c.sent_fail }}</span>{% else %}<span class="muted">0</span>{% endif %}</td>
-        <td><a href="{{ url_for('campaign_detail', campaign_id=c.id) }}" class="btn btn--sm btn--ghost">View</a></td>
+        <td><span class="badge {{ 'badge--orange' if c.status in ('queued', 'sending') else 'badge--gray' }}" data-campaign-status>{{ c.status | capitalize }}</span></td>
+        <td><span class="badge badge--green" data-campaign-sent>{{ metrics.sent }}</span></td>
+        <td>
+          <span class="badge badge--red" data-campaign-failed>{{ metrics.failed }}</span>
+          <small class="muted" data-campaign-failure-rate>{{ ('(' ~ metrics.failure_rate ~ '%)') if metrics.failure_rate is not none else '' }}</small>
+        </td>
+        <td>
+          <a href="{{ url_for('campaign_detail', campaign_id=c.id) }}" class="btn btn--sm btn--ghost">View</a>
+          <form method="POST" action="{{ url_for('campaign_retry', campaign_id=c.id) }}" data-campaign-retry style="display:{{ 'inline' if metrics.can_retry else 'none' }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn btn--sm btn--primary" data-campaign-retry-button>
+              ↻ Resend {{ metrics.unsent }} unsent
+            </button>
+          </form>
+        </td>
       </tr>
       {% endfor %}
     </tbody>
@@ -75,4 +91,73 @@
   <a href="{{ url_for('campaign_new') }}" class="btn btn--primary">Create your first campaign</a>
 </div>
 {% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+(() => {
+  const rows = Array.from(document.querySelectorAll("[data-campaign-row]"));
+
+  function formatRate(value) {
+    return value === null || value === undefined ? "—" : `${value}%`;
+  }
+
+  function recomputeSummary() {
+    const sent = rows.reduce((sum, row) => sum + Number(row.dataset.sent || 0), 0);
+    const failed = rows.reduce((sum, row) => sum + Number(row.dataset.failed || 0), 0);
+    const attempted = sent + failed;
+    const deliveryRate = attempted ? Math.round((sent / attempted) * 1000) / 10 : null;
+    const failureRate = attempted ? Math.round((failed / attempted) * 1000) / 10 : null;
+
+    document.getElementById("dashboard-sent-ok").textContent = sent;
+    document.getElementById("dashboard-sent-fail").textContent = failed;
+    document.getElementById("dashboard-delivery-rate").textContent = formatRate(deliveryRate);
+    document.getElementById("dashboard-failure-rate").textContent = formatRate(failureRate);
+  }
+
+  function updateRow(row, status) {
+    const sent = status.sent || 0;
+    const failed = status.failed || 0;
+    const pending = status.pending || 0;
+    row.dataset.status = status.status;
+    row.dataset.sent = sent;
+    row.dataset.failed = failed;
+    row.querySelector("[data-campaign-sent]").textContent = sent;
+    row.querySelector("[data-campaign-failed]").textContent = failed;
+    row.querySelector("[data-campaign-failure-rate]").textContent =
+      status.failure_rate === null || status.failure_rate === undefined
+        ? ""
+        : `(${status.failure_rate}%)`;
+
+    const statusBadge = row.querySelector("[data-campaign-status]");
+    statusBadge.textContent = status.status.charAt(0).toUpperCase() + status.status.slice(1);
+    statusBadge.className = `badge ${["queued", "sending"].includes(status.status) ? "badge--orange" : "badge--gray"}`;
+
+    const retryForm = row.querySelector("[data-campaign-retry]");
+    const retryButton = row.querySelector("[data-campaign-retry-button]");
+    const unsent = failed + pending;
+    retryForm.style.display = status.can_retry ? "inline" : "none";
+    retryButton.textContent = `↻ Resend ${unsent} unsent`;
+    recomputeSummary();
+  }
+
+  async function pollRow(row) {
+    if (!["queued", "sending"].includes(row.dataset.status)) return;
+
+    try {
+      const response = await fetch(`/campaign/${row.dataset.campaignId}/status`);
+      if (response.ok) {
+        const status = await response.json();
+        updateRow(row, status);
+      }
+    } catch (_) {}
+
+    if (["queued", "sending"].includes(row.dataset.status)) {
+      window.setTimeout(() => pollRow(row), 2000);
+    }
+  }
+
+  rows.forEach(pollRow);
+})();
+</script>
 {% endblock %}

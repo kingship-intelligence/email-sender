@@ -544,14 +544,51 @@ def dashboard():
         .order_by(Campaign.created_at.desc())
         .all()
     )
+
+    campaign_metrics = {
+        campaign.id: {"sent": 0, "failed": 0, "pending": 0}
+        for campaign in campaigns
+    }
+    campaign_ids = list(campaign_metrics)
+    if campaign_ids:
+        recipient_counts = (
+            db.session.query(
+                CampaignRecipient.campaign_id,
+                CampaignRecipient.status,
+                db.func.count(CampaignRecipient.id),
+            )
+            .filter(CampaignRecipient.campaign_id.in_(campaign_ids))
+            .group_by(CampaignRecipient.campaign_id, CampaignRecipient.status)
+            .all()
+        )
+        for campaign_id, status, count in recipient_counts:
+            if status in campaign_metrics[campaign_id]:
+                campaign_metrics[campaign_id][status] = count
+
+    for campaign in campaigns:
+        metrics = campaign_metrics[campaign.id]
+        attempted = metrics["sent"] + metrics["failed"]
+        metrics["delivery_rate"] = round(metrics["sent"] / attempted * 100, 1) if attempted else None
+        metrics["failure_rate"] = round(metrics["failed"] / attempted * 100, 1) if attempted else None
+        metrics["unsent"] = metrics["failed"] + metrics["pending"]
+        metrics["can_retry"] = (
+            metrics["unsent"] > 0 and campaign.status not in ("queued", "sending")
+        )
+
     stats = {
         "campaigns": len(campaigns),
-        "sent_ok": sum(c.sent_ok or 0 for c in campaigns),
-        "sent_fail": sum(c.sent_fail or 0 for c in campaigns),
+        "sent_ok": sum(metrics["sent"] for metrics in campaign_metrics.values()),
+        "sent_fail": sum(metrics["failed"] for metrics in campaign_metrics.values()),
     }
     attempted = stats["sent_ok"] + stats["sent_fail"]
-    stats["rate"] = round(stats["sent_ok"] / attempted * 100, 1) if attempted else None
-    return render_template("dashboard.html", campaigns=campaigns, stats=stats)
+    stats["delivery_rate"] = round(stats["sent_ok"] / attempted * 100, 1) if attempted else None
+    stats["failure_rate"] = round(stats["sent_fail"] / attempted * 100, 1) if attempted else None
+    return render_template(
+        "dashboard.html",
+        campaigns=campaigns,
+        campaign_metrics=campaign_metrics,
+        stats=stats,
+    )
 
 
 # ── Campaign ──────────────────────────────────────────────────────────────────
@@ -600,7 +637,7 @@ def campaign_retry(campaign_id):
     """Reset pending/failed recipients and re-run the background send on the same campaign."""
     campaign = Campaign.query.filter_by(id=campaign_id, user_id=current_user.id).first_or_404()
 
-    if campaign.status == "sending":
+    if campaign.status in ("queued", "sending"):
         flash("This campaign is already sending. Please wait for it to finish.", "error")
         return redirect(url_for("campaign_detail", campaign_id=campaign.id))
 
@@ -866,6 +903,24 @@ def generate():
         return jsonify({"error": f"AI generation failed: {e}"}), 500
 
 
+def _mark_pending_recipients_failed(campaign: Campaign, error: str):
+    pending = CampaignRecipient.query.filter_by(
+        campaign_id=campaign.id, status="pending"
+    ).all()
+    for recipient in pending:
+        recipient.status = "failed"
+        recipient.error = error
+
+    campaign.sent_ok = CampaignRecipient.query.filter_by(
+        campaign_id=campaign.id, status="sent"
+    ).count()
+    campaign.sent_fail = CampaignRecipient.query.filter_by(
+        campaign_id=campaign.id, status="failed"
+    ).count()
+    campaign.status = "completed"
+    db.session.commit()
+
+
 def _send_campaign_background(campaign_id: int):
     """Background worker: sends all pending recipients for a campaign."""
     with app.app_context():
@@ -878,16 +933,26 @@ def _send_campaign_background(campaign_id: int):
 
         user = User.query.get(campaign.user_id)
         if not user or not user.smtp_host or not user.smtp_pass_enc:
-            campaign.status = "completed"
-            db.session.commit()
+            _mark_pending_recipients_failed(
+                campaign,
+                "SMTP is not fully configured. Update your SMTP settings and resend.",
+            )
             return
 
-        smtp_host  = user.smtp_host
-        smtp_port  = user.smtp_port
-        smtp_user  = user.smtp_user
-        smtp_pass  = decrypt_password(user.smtp_pass_enc)
-        use_tls    = user.smtp_use_tls
-        from_addr  = user.smtp_from or smtp_user
+        try:
+            smtp_host  = user.smtp_host
+            smtp_port  = user.smtp_port
+            smtp_user  = user.smtp_user
+            smtp_pass  = decrypt_password(user.smtp_pass_enc)
+            use_tls    = user.smtp_use_tls
+            from_addr  = user.smtp_from or smtp_user
+        except Exception as error:
+            _mark_pending_recipients_failed(
+                campaign,
+                f"Could not load SMTP credentials: {error}",
+            )
+            return
+
         subject    = campaign.subject
         body       = campaign.body
         attachments = _pending_attachments.pop(campaign_id, [])
@@ -913,15 +978,7 @@ def _send_campaign_background(campaign_id: int):
         try:
             server = _make_smtp_connection()
         except Exception as e:
-            err_str = str(e)
-            for r in pending:
-                r.status = "failed"
-                r.error  = err_str
-                fail += 1
-            campaign.sent_ok   = ok
-            campaign.sent_fail = fail
-            campaign.status    = "completed"
-            db.session.commit()
+            _mark_pending_recipients_failed(campaign, str(e))
             return
 
         for r in pending:
@@ -969,6 +1026,8 @@ def _send_campaign_background(campaign_id: int):
                 r.status = "failed"
                 r.error  = err_str
                 fail += 1
+            campaign.sent_ok = ok
+            campaign.sent_fail = fail
             db.session.commit()
 
         try:
@@ -1078,6 +1137,12 @@ def campaign_status(campaign_id):
         "failed":      failed,
         "pending":     pending,
     }
+    attempted = sent + failed
+    payload["delivery_rate"] = round(sent / attempted * 100, 1) if attempted else None
+    payload["failure_rate"] = round(failed / attempted * 100, 1) if attempted else None
+    payload["can_retry"] = (
+        failed + pending > 0 and campaign.status not in ("queued", "sending")
+    )
 
     # When the campaign is done, include per-recipient result details so the
     # frontend can show which addresses succeeded and which failed.
