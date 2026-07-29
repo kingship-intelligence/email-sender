@@ -281,6 +281,7 @@
 <script>
   const IS_PRO = true;
   const SEND_LIMIT = null;
+  const SMTP_HOST = {{ (current_user.smtp_host or '') | tojson }};
   {% if prefill %}
   const PREFILL = {{ prefill | tojson }};
   {% else %}

@@ -480,6 +480,25 @@ if (sendBtn) {
     const nameEl  = document.getElementById("campaign-name-ai") || document.getElementById("campaign-name-manual");
     const name    = (nameEl ? nameEl.value.trim() : "") || "Campaign";
 
+    // Warn before sending a large campaign via Gmail
+    const selectedEmails = getSelectedEmails();
+    if (
+      typeof SMTP_HOST === "string" &&
+      SMTP_HOST.toLowerCase().includes("gmail") &&
+      selectedEmails.length > 500
+    ) {
+      const confirmed = confirm(
+        `⚠️ Gmail sending limit warning\n\n` +
+        `This campaign has ${selectedEmails.length} recipients, but Gmail personal accounts ` +
+        `allow only 500 emails/day (2,000 on Workspace).\n\n` +
+        `Recipients beyond the daily limit will fail with a rate-limit error.\n\n` +
+        `Consider using a dedicated provider (Brevo, SendGrid) for large campaigns, ` +
+        `or splitting this campaign across multiple days.\n\n` +
+        `Send anyway?`
+      );
+      if (!confirmed) return;
+    }
+
     sendBtn.disabled = true;
     document.getElementById("step3-actions").style.display = "none";
     document.getElementById("send-progress").style.display = "";
@@ -487,7 +506,6 @@ if (sendBtn) {
     const bar   = document.getElementById("progress-bar");
     const label = document.getElementById("progress-label");
     const log   = document.getElementById("send-log");
-    const selectedEmails = getSelectedEmails();
     const total = selectedEmails.length;
     let done = 0, ok = 0, fail = 0;
 

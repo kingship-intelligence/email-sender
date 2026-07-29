@@ -32,6 +32,9 @@
         <div class="field">
           <label for="smtp_host">SMTP Host</label>
           <input type="text" id="smtp_host" name="smtp_host" value="{{ current_user.smtp_host or '' }}" placeholder="smtp.gmail.com" />
+          <div id="gmail-limit-note" class="field__hint" style="display:{% if current_user.smtp_host and 'gmail.com' in current_user.smtp_host %}{% else %}none{% endif %}">
+            ⚠️ Gmail limits personal accounts to <strong>500 emails/day</strong> (2,000 on Workspace). For larger campaigns, use a dedicated provider like Brevo or SendGrid.
+          </div>
         </div>
         <div class="field field--sm">
           <label for="smtp_port">Port</label>
@@ -142,6 +145,18 @@
 
     // Once the form is actually submitted and saved, drop the draft.
     form.addEventListener("submit", clearDraft);
+  })();
+
+  // ── Gmail daily-limit note (show/hide based on host field) ───
+  (function () {
+    var hostInput = document.getElementById("smtp_host");
+    var note      = document.getElementById("gmail-limit-note");
+    if (!hostInput || !note) return;
+    function updateNote() {
+      note.style.display = hostInput.value.toLowerCase().includes("gmail.com") ? "" : "none";
+    }
+    hostInput.addEventListener("input", updateNote);
+    updateNote();
   })();
 
   // ── Provider presets ──────────────────────────────────────────

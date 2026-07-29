@@ -937,8 +937,25 @@ def _send_campaign_background(campaign_id: int):
                 r.sent_at = datetime.utcnow()
                 ok += 1
             except Exception as e:
+                err_str = str(e)
+                # Detect Gmail daily sending quota errors and surface a clear message
+                if "gmail" in smtp_host.lower():
+                    err_lower = err_str.lower()
+                    if any(kw in err_lower for kw in (
+                        "daily user sending quota exceeded",
+                        "daily sending quota exceeded",
+                        "too many messages",
+                        "rate limit exceeded",
+                        "4.7.0",   # Gmail's SMTP rate-limit prefix
+                        "5.7.0",   # Gmail's policy rejection prefix
+                    )):
+                        err_str = (
+                            "Gmail daily sending limit reached — "
+                            "Gmail personal accounts allow 500 emails/day (2,000 on Workspace). "
+                            f"Original error: {err_str}"
+                        )
                 r.status = "failed"
-                r.error  = str(e)
+                r.error  = err_str
                 fail += 1
             db.session.commit()
 
