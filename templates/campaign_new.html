@@ -236,6 +236,30 @@
           <span class="stat-label">Failed</span>
         </div>
       </div>
+
+      <!-- Per-recipient results breakdown -->
+      <div id="recipient-results" style="margin-top:1.25rem;display:none">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.5rem">
+          <h3 style="margin:0;font-size:1rem">Results breakdown</h3>
+          <button type="button" class="btn btn--sm btn--ghost" id="download-failed-btn" style="display:none">
+            ⬇ Download failed list
+          </button>
+        </div>
+        <div class="table-wrap">
+          <table class="table recipients-table" id="recipients-table">
+            <thead>
+              <tr>
+                <th>Email</th>
+                <th>Name</th>
+                <th>Status</th>
+                <th>Error</th>
+              </tr>
+            </thead>
+            <tbody id="recipients-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
       <a href="{{ url_for('dashboard') }}" class="btn btn--primary btn--full" style="margin-top:1rem">Back to Dashboard</a>
     </div>
 

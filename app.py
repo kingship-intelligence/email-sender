@@ -1040,14 +1040,31 @@ def campaign_status(campaign_id):
     sent    = CampaignRecipient.query.filter_by(campaign_id=campaign_id, status="sent").count()
     failed  = CampaignRecipient.query.filter_by(campaign_id=campaign_id, status="failed").count()
     pending = CampaignRecipient.query.filter_by(campaign_id=campaign_id, status="pending").count()
-    return jsonify({
+
+    payload = {
         "campaign_id": campaign_id,
         "status":      campaign.status,
         "total":       campaign.total,
         "sent":        sent,
         "failed":      failed,
         "pending":     pending,
-    })
+    }
+
+    # When the campaign is done, include per-recipient result details so the
+    # frontend can show which addresses succeeded and which failed.
+    if campaign.status == "completed":
+        all_recipients = CampaignRecipient.query.filter_by(campaign_id=campaign_id).all()
+        payload["recipients"] = [
+            {
+                "email":  r.email,
+                "name":   r.name or "",
+                "status": r.status,
+                "error":  r.error or "",
+            }
+            for r in all_recipients
+        ]
+
+    return jsonify(payload)
 
 
 # ── Settings ──────────────────────────────────────────────────────────────────

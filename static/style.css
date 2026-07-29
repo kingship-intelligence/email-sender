@@ -525,6 +525,10 @@ textarea { resize: vertical; }
 .stat-num   { font-size: 2rem; font-weight: 800; display: block; }
 .stat-label { font-size: .8rem; color: var(--gray-600); }
 
+/* ── Recipient results breakdown (campaign wizard send-done) ─── */
+.recipients-table { font-size: .85rem; }
+.recipient-error  { color: var(--red); font-size: .82rem; word-break: break-word; }
+
 /* ── Stats row (campaign detail) ─────────────────────────────── */
 .stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1rem; }
 .stat-card {

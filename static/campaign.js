@@ -541,6 +541,11 @@ if (sendBtn) {
             document.getElementById("done-ok").textContent   = ok;
             document.getElementById("done-fail").textContent = fail;
             document.getElementById("send-done").style.display = "";
+
+            // Render per-recipient breakdown if the server returned recipients
+            if (Array.isArray(s.recipients) && s.recipients.length > 0) {
+              renderRecipientResults(s.recipients);
+            }
           }
         } catch (_) {}
       }, 2000);
@@ -549,6 +554,67 @@ if (sendBtn) {
       label.textContent = "Error: " + e.message;
     }
   });
+}
+
+/* ─── Recipient results breakdown ─────────────────────────────── */
+function renderRecipientResults(recipients) {
+  const wrap   = document.getElementById("recipient-results");
+  const tbody  = document.getElementById("recipients-tbody");
+  const dlBtn  = document.getElementById("download-failed-btn");
+  if (!wrap || !tbody) return;
+
+  tbody.innerHTML = "";
+
+  const failed = recipients.filter(r => r.status !== "sent");
+
+  recipients.forEach(r => {
+    const tr = document.createElement("tr");
+    const statusBadge = r.status === "sent"
+      ? '<span class="badge badge--green">✓ sent</span>'
+      : '<span class="badge badge--red">✗ failed</span>';
+    const errorCell = r.error
+      ? `<span class="recipient-error" title="${escapeHtml(r.error)}">${escapeHtml(truncate(r.error, 80))}</span>`
+      : '<span class="muted">—</span>';
+    tr.innerHTML = `<td>${escapeHtml(r.email)}</td><td>${escapeHtml(r.name || "—")}</td><td>${statusBadge}</td><td>${errorCell}</td>`;
+    tbody.appendChild(tr);
+  });
+
+  wrap.style.display = "";
+
+  // Show download button only when there are failures
+  if (failed.length > 0 && dlBtn) {
+    dlBtn.style.display = "";
+    dlBtn.onclick = () => downloadFailedCsv(failed);
+  }
+}
+
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function truncate(str, max) {
+  return str.length > max ? str.slice(0, max) + "…" : str;
+}
+
+function downloadFailedCsv(failed) {
+  const rows = [["email", "name", "error"]];
+  failed.forEach(r => rows.push([r.email, r.name || "", r.error || ""]));
+  const csv = rows.map(row =>
+    row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(",")
+  ).join("\r\n");
+  const blob = new Blob([csv], { type: "text/csv" });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href     = url;
+  a.download = "failed-recipients.csv";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 /* ─── Schedule ────────────────────────────────────────────────── */
