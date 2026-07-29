@@ -898,15 +898,20 @@ def _send_campaign_background(campaign_id: int):
         ok   = CampaignRecipient.query.filter_by(campaign_id=campaign_id, status="sent").count()
         fail = CampaignRecipient.query.filter_by(campaign_id=campaign_id, status="failed").count()
 
+        def _make_smtp_connection():
+            """Open and authenticate a fresh SMTP connection."""
+            if use_tls:
+                srv = smtplib.SMTP(smtp_host, smtp_port, timeout=20)
+                srv.ehlo()
+                srv.starttls()
+            else:
+                srv = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=20)
+            srv.login(smtp_user, smtp_pass)
+            return srv
+
         server = None
         try:
-            if use_tls:
-                server = smtplib.SMTP(smtp_host, smtp_port, timeout=20)
-                server.ehlo()
-                server.starttls()
-            else:
-                server = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=20)
-            server.login(smtp_user, smtp_pass)
+            server = _make_smtp_connection()
         except Exception as e:
             err_str = str(e)
             for r in pending:
@@ -933,7 +938,13 @@ def _send_campaign_background(campaign_id: int):
                     encoders.encode_base64(part)
                     part.add_header("Content-Disposition", "attachment", filename=att_name)
                     msg.attach(part)
-                server.sendmail(from_addr, r.email, msg.as_string())
+                raw = msg.as_string()
+                try:
+                    server.sendmail(from_addr, r.email, raw)
+                except smtplib.SMTPServerDisconnected:
+                    # Server dropped the connection — reconnect once and retry
+                    server = _make_smtp_connection()
+                    server.sendmail(from_addr, r.email, raw)
                 r.status  = "sent"
                 r.sent_at = datetime.utcnow()
                 ok += 1
