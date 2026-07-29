@@ -28,6 +28,10 @@ from cryptography.fernet import Fernet
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from apscheduler.schedulers.background import BackgroundScheduler
 
+# Module-level scheduler reference (set at startup) and attachment store
+_scheduler = None
+_pending_attachments: dict = {}  # campaign_id -> [(name, bytes, mime)]
+
 import stripe
 import requests as req_lib
 from bs4 import BeautifulSoup
@@ -802,15 +806,102 @@ def generate():
         return jsonify({"error": f"AI generation failed: {e}"}), 500
 
 
+def _send_campaign_background(campaign_id: int):
+    """Background worker: sends all pending recipients for a campaign."""
+    with app.app_context():
+        campaign = Campaign.query.get(campaign_id)
+        if not campaign:
+            return
+
+        campaign.status = "sending"
+        db.session.commit()
+
+        user = User.query.get(campaign.user_id)
+        if not user or not user.smtp_host or not user.smtp_pass_enc:
+            campaign.status = "completed"
+            db.session.commit()
+            return
+
+        smtp_host  = user.smtp_host
+        smtp_port  = user.smtp_port
+        smtp_user  = user.smtp_user
+        smtp_pass  = decrypt_password(user.smtp_pass_enc)
+        use_tls    = user.smtp_use_tls
+        from_addr  = user.smtp_from or smtp_user
+        subject    = campaign.subject
+        body       = campaign.body
+        attachments = _pending_attachments.pop(campaign_id, [])
+
+        pending = CampaignRecipient.query.filter_by(
+            campaign_id=campaign_id, status="pending"
+        ).all()
+        ok   = CampaignRecipient.query.filter_by(campaign_id=campaign_id, status="sent").count()
+        fail = CampaignRecipient.query.filter_by(campaign_id=campaign_id, status="failed").count()
+
+        server = None
+        try:
+            if use_tls:
+                server = smtplib.SMTP(smtp_host, smtp_port, timeout=20)
+                server.ehlo()
+                server.starttls()
+            else:
+                server = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=20)
+            server.login(smtp_user, smtp_pass)
+        except Exception as e:
+            err_str = str(e)
+            for r in pending:
+                r.status = "failed"
+                r.error  = err_str
+                fail += 1
+            campaign.sent_ok   = ok
+            campaign.sent_fail = fail
+            campaign.status    = "completed"
+            db.session.commit()
+            return
+
+        for r in pending:
+            try:
+                msg = MIMEMultipart("mixed")
+                msg["From"]    = from_addr
+                msg["To"]      = r.email
+                msg["Subject"] = personalize_text(subject, r.email, r.name or "")
+                msg.attach(MIMEText(personalize_text(body, r.email, r.name or ""), "html"))
+                for att_name, att_data, att_mime in attachments:
+                    maintype, subtype = att_mime.split("/", 1) if "/" in att_mime else ("application", "octet-stream")
+                    part = MIMEBase(maintype, subtype)
+                    part.set_payload(att_data)
+                    encoders.encode_base64(part)
+                    part.add_header("Content-Disposition", "attachment", filename=att_name)
+                    msg.attach(part)
+                server.sendmail(from_addr, r.email, msg.as_string())
+                r.status  = "sent"
+                r.sent_at = datetime.utcnow()
+                ok += 1
+            except Exception as e:
+                r.status = "failed"
+                r.error  = str(e)
+                fail += 1
+            db.session.commit()
+
+        try:
+            server.quit()
+        except Exception:
+            pass
+
+        campaign.sent_ok   = ok
+        campaign.sent_fail = fail
+        campaign.status    = "completed"
+        db.session.commit()
+
+
 @app.route("/send-bulk", methods=["POST"])
 @login_required
 @subscription_required
 def send_bulk():
-    # Accept multipart/form-data (with optional file attachments)
-    emails_raw = request.form.get("emails", "[]")
-    names_raw = request.form.get("names", "{}")
-    subject = request.form.get("subject", "").strip()
-    body = request.form.get("body", "").strip()
+    emails_raw    = request.form.get("emails", "[]")
+    names_raw     = request.form.get("names", "{}")
+    subject       = request.form.get("subject", "").strip()
+    body          = request.form.get("body", "").strip()
     campaign_name = (request.form.get("name", "Campaign") or "Campaign").strip()
 
     try:
@@ -832,127 +923,72 @@ def send_bulk():
     if not current_user.smtp_host:
         return jsonify({"error": "SMTP is not configured. Go to Settings."}), 400
 
-    # Read uploaded attachments into memory
-    attachment_files = request.files.getlist("attachments")
+    # Read attachments into memory before the request context closes
     attachments = []
-    for att_file in attachment_files:
+    for att_file in request.files.getlist("attachments"):
         if att_file and att_file.filename:
-            att_data = att_file.read()
-            attachments.append((att_file.filename, att_data, att_file.mimetype or "application/octet-stream"))
+            attachments.append((att_file.filename, att_file.read(),
+                                att_file.mimetype or "application/octet-stream"))
 
-    smtp_host = current_user.smtp_host
-    smtp_port = current_user.smtp_port
-    smtp_user = current_user.smtp_user
-    smtp_pass = decrypt_password(current_user.smtp_pass_enc)
-    use_tls = current_user.smtp_use_tls
-    from_addr = current_user.smtp_from or smtp_user
-
-    # Create campaign record
+    # Create campaign + recipient rows with status="queued"
     campaign = Campaign(
         user_id=current_user.id,
         name=campaign_name,
         subject=subject,
         body=body,
         total=len(emails),
+        status="queued",
     )
     db.session.add(campaign)
     db.session.flush()
 
-    recipient_rows = []
     for email in emails:
-        r = CampaignRecipient(
+        db.session.add(CampaignRecipient(
             campaign_id=campaign.id,
             email=email,
             name=resolve_recipient_name(email, names_map) or None,
-        )
-        db.session.add(r)
-        recipient_rows.append(r)
-    db.session.flush()
+        ))
 
-    # Capture all data we need from ORM objects as plain Python values
-    # BEFORE commit() expires them — avoids DetachedInstanceError in the generator.
-    campaign_id = campaign.id
-    recipient_data = [{"id": r.id, "email": r.email, "name": r.name or ""} for r in recipient_rows]
     db.session.commit()
+    campaign_id = campaign.id
 
-    def stream():
-        ok = 0
-        fail = 0
-        server = None
-        try:
-            if use_tls:
-                server = smtplib.SMTP(smtp_host, smtp_port, timeout=10)
-                server.ehlo()
-                server.starttls()
-            else:
-                server = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=10)
-            server.login(smtp_user, smtp_pass)
-        except Exception as e:
-            err_str = str(e)
-            with app.app_context():
-                for rd in recipient_data:
-                    CampaignRecipient.query.filter_by(id=rd["id"]).update(
-                        {"status": "failed", "error": err_str}
-                    )
-                    fail += 1
-                    yield json.dumps({"email": rd["email"], "status": "failed", "error": err_str}) + "\n"
-                Campaign.query.filter_by(id=campaign_id).update(
-                    {"sent_ok": 0, "sent_fail": fail, "status": "completed"}
-                )
-                db.session.commit()
-            yield json.dumps({"done": True, "ok": 0, "fail": fail, "campaign_id": campaign_id}) + "\n"
-            return
+    if attachments:
+        _pending_attachments[campaign_id] = attachments
 
-        for rd in recipient_data:
-            r_email = rd["email"]
-            r_id = rd["id"]
-            r_name = rd["name"]
-            try:
-                msg = MIMEMultipart("mixed")
-                msg["From"] = from_addr
-                msg["To"] = r_email
-                msg["Subject"] = personalize_text(subject, r_email, r_name)
-                msg.attach(MIMEText(personalize_text(body, r_email, r_name), "html"))
+    # Dispatch to background scheduler — no HTTP connection dependency
+    if _scheduler and _scheduler.running:
+        _scheduler.add_job(
+            _send_campaign_background,
+            args=[campaign_id],
+            id=f"send_campaign_{campaign_id}",
+            replace_existing=True,
+        )
+    else:
+        import threading
+        threading.Thread(
+            target=_send_campaign_background, args=[campaign_id], daemon=True
+        ).start()
 
-                for att_name, att_data, att_mime in attachments:
-                    maintype, subtype = att_mime.split("/", 1) if "/" in att_mime else ("application", "octet-stream")
-                    part = MIMEBase(maintype, subtype)
-                    part.set_payload(att_data)
-                    encoders.encode_base64(part)
-                    part.add_header("Content-Disposition", "attachment", filename=att_name)
-                    msg.attach(part)
+    return jsonify({"campaign_id": campaign_id, "total": len(emails)})
 
-                server.sendmail(from_addr, r_email, msg.as_string())
-                with app.app_context():
-                    CampaignRecipient.query.filter_by(id=r_id).update(
-                        {"status": "sent", "sent_at": datetime.utcnow()}
-                    )
-                    db.session.commit()
-                ok += 1
-                yield json.dumps({"email": r_email, "status": "sent"}) + "\n"
-            except Exception as e:
-                err_str = str(e)
-                with app.app_context():
-                    CampaignRecipient.query.filter_by(id=r_id).update(
-                        {"status": "failed", "error": err_str}
-                    )
-                    db.session.commit()
-                fail += 1
-                yield json.dumps({"email": r_email, "status": "failed", "error": err_str}) + "\n"
 
-        try:
-            server.quit()
-        except Exception:
-            pass
-
-        with app.app_context():
-            Campaign.query.filter_by(id=campaign_id).update(
-                {"sent_ok": ok, "sent_fail": fail, "status": "completed"}
-            )
-            db.session.commit()
-        yield json.dumps({"done": True, "ok": ok, "fail": fail, "campaign_id": campaign_id}) + "\n"
-
-    return Response(stream_with_context(stream()), mimetype="application/x-ndjson")
+@app.route("/campaign/<int:campaign_id>/status")
+@login_required
+def campaign_status(campaign_id):
+    campaign = Campaign.query.filter_by(
+        id=campaign_id, user_id=current_user.id
+    ).first_or_404()
+    sent    = CampaignRecipient.query.filter_by(campaign_id=campaign_id, status="sent").count()
+    failed  = CampaignRecipient.query.filter_by(campaign_id=campaign_id, status="failed").count()
+    pending = CampaignRecipient.query.filter_by(campaign_id=campaign_id, status="pending").count()
+    return jsonify({
+        "campaign_id": campaign_id,
+        "status":      campaign.status,
+        "total":       campaign.total,
+        "sent":        sent,
+        "failed":      failed,
+        "pending":     pending,
+    })
 
 
 # ── Settings ──────────────────────────────────────────────────────────────────
@@ -1443,6 +1479,7 @@ if os.environ.get("WERKZEUG_RUN_MAIN") == "true" or not app.debug:
     _scheduler = BackgroundScheduler(daemon=True)
     _scheduler.add_job(run_scheduled_campaigns, "interval", minutes=1, max_instances=1)
     _scheduler.start()
+    print("[scheduler] started")
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)

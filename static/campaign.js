@@ -506,43 +506,45 @@ if (sendBtn) {
         body: fd
       });
 
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { value, done: streamDone } = await reader.read();
-        if (streamDone) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop();
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            const msg = JSON.parse(line);
-            if (msg.done) {
-              ok   = msg.ok;
-              fail = msg.fail;
-              bar.style.width = "100%";
-              label.textContent = `Done — ${ok} delivered, ${fail} failed.`;
-              document.getElementById("send-progress").style.display = "none";
-              document.getElementById("done-ok").textContent   = ok;
-              document.getElementById("done-fail").textContent = fail;
-              document.getElementById("send-done").style.display = "";
-            } else {
-              done++;
-              const pct = Math.round((done / total) * 100);
-              bar.style.width = pct + "%";
-              label.textContent = `Sending… ${done} / ${total}`;
-              const row = document.createElement("div");
-              row.className = msg.status === "sent" ? "log-ok" : "log-fail";
-              row.textContent = (msg.status === "sent" ? "✓ " : "✗ ") + msg.email + (msg.error ? " — " + msg.error : "");
-              log.appendChild(row);
-              log.scrollTop = log.scrollHeight;
-            }
-          } catch (_) {}
-        }
+      const data = await resp.json();
+      if (!resp.ok || data.error) {
+        label.textContent = "Error: " + (data.error || "Send failed.");
+        sendBtn.disabled = false;
+        document.getElementById("step3-actions").style.display = "";
+        document.getElementById("send-progress").style.display = "none";
+        return;
       }
+
+      const campaignId = data.campaign_id;
+      bar.style.width = "3%";
+      label.textContent = `Queued — starting send for ${total} recipient${total !== 1 ? "s" : ""}…`;
+
+      // Poll /campaign/<id>/status every 2s until completed
+      const poll = setInterval(async () => {
+        try {
+          const sr = await fetch(`/campaign/${campaignId}/status`, {
+            headers: { "X-CSRFToken": getCsrfToken() }
+          });
+          const s = await sr.json();
+          const done = (s.sent || 0) + (s.failed || 0);
+          const pct  = total > 0 ? Math.round((done / total) * 100) : 0;
+          bar.style.width = Math.max(pct, 3) + "%";
+          label.textContent = `Sending… ${done} / ${total}`;
+
+          if (s.status === "completed" || done >= total) {
+            clearInterval(poll);
+            const ok   = s.sent   || 0;
+            const fail = s.failed || 0;
+            bar.style.width = "100%";
+            label.textContent = `Done — ${ok} delivered, ${fail} failed.`;
+            document.getElementById("send-progress").style.display = "none";
+            document.getElementById("done-ok").textContent   = ok;
+            document.getElementById("done-fail").textContent = fail;
+            document.getElementById("send-done").style.display = "";
+          }
+        } catch (_) {}
+      }, 2000);
+
     } catch (e) {
       label.textContent = "Error: " + e.message;
     }
