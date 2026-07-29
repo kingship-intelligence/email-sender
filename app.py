@@ -354,7 +354,7 @@ def subscription_required(f):
 def index():
     if current_user.is_authenticated:
         return redirect(url_for("dashboard"))
-    return render_template("homepage.html")
+    return render_template("homepage.html", canonical_url=get_domain() + "/")
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -373,11 +373,11 @@ def login():
                     "<a href=\"" + url_for("resend_verification", email=user.email) + "\">Resend verification email</a>",
                     "error"
                 )
-                return render_template("login.html")
+                return render_template("login.html", canonical_url=get_domain() + "/login")
             login_user(user)
             return redirect(url_for("dashboard"))
         flash("Invalid email or password.", "error")
-    return render_template("login.html")
+    return render_template("login.html", canonical_url=get_domain() + "/login")
 
 
 @app.route("/register", methods=["GET", "POST"])
@@ -390,10 +390,10 @@ def register():
         password2 = request.form.get("password2", "")
         policy_errors = validate_password(password)
         if policy_errors:
-            return render_template("register.html", password_errors=policy_errors, email=email)
+            return render_template("register.html", password_errors=policy_errors, email=email, canonical_url=get_domain() + "/register")
         elif password != password2:
             flash("Passwords do not match.", "error")
-            return render_template("register.html", password_errors=[], email=email)
+            return render_template("register.html", password_errors=[], email=email, canonical_url=get_domain() + "/register")
         elif User.query.filter_by(email=email).first():
             flash("An account with that email already exists.", "error")
         else:
@@ -429,7 +429,7 @@ def register():
                     "success"
                 )
             return redirect(url_for("login"))
-    return render_template("register.html", password_errors=[])
+    return render_template("register.html", password_errors=[], canonical_url=get_domain() + "/register")
 
 
 @app.route("/verify/<token>")
@@ -495,7 +495,7 @@ def forgot_password():
             )
         flash("If an account with that email exists, we've sent a reset link. Check your inbox.", "success")
         return redirect(url_for("login"))
-    return render_template("forgot_password.html")
+    return render_template("forgot_password.html", canonical_url=get_domain() + "/forgot-password")
 
 
 @app.route("/reset-password/<token>", methods=["GET", "POST"])
@@ -512,17 +512,18 @@ def reset_password(token):
         password  = request.form.get("password", "")
         password2 = request.form.get("password2", "")
         policy_errors = validate_password(password)
+        _reset_canonical = get_domain() + "/forgot-password"
         if policy_errors:
-            return render_template("reset_password.html", token=token, password_errors=policy_errors)
+            return render_template("reset_password.html", token=token, password_errors=policy_errors, canonical_url=_reset_canonical)
         elif password != password2:
-            return render_template("reset_password.html", token=token, password_errors=[], mismatch=True)
+            return render_template("reset_password.html", token=token, password_errors=[], mismatch=True, canonical_url=_reset_canonical)
         else:
             user.password_hash = bcrypt.generate_password_hash(password).decode()
             user.verified = True  # also verify if they weren't
             db.session.commit()
             flash("Password updated! You can now sign in.", "success")
             return redirect(url_for("login"))
-    return render_template("reset_password.html", token=token, password_errors=[])
+    return render_template("reset_password.html", token=token, password_errors=[], canonical_url=get_domain() + "/forgot-password")
 
 
 @app.route("/logout")
