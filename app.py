@@ -1532,6 +1532,40 @@ def tutorial():
     return render_template("tutorial.html")
 
 
+@app.route("/robots.txt")
+def robots_txt():
+    content = (
+        "User-agent: *\n"
+        "Allow: /\n"
+        "Disallow: /dashboard\n"
+        "Disallow: /campaign/\n"
+        "Disallow: /settings\n"
+        "Disallow: /scheduled\n"
+        "\n"
+        f"Sitemap: {get_domain()}/sitemap.xml\n"
+    )
+    return Response(content, mimetype="text/plain")
+
+
+@app.route("/sitemap.xml")
+def sitemap_xml():
+    domain = get_domain().rstrip("/")
+    content = f"""<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>{domain}/</loc>
+    <changefreq>weekly</changefreq>
+    <priority>1.0</priority>
+  </url>
+  <url>
+    <loc>{domain}/register</loc>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+</urlset>"""
+    return Response(content, mimetype="application/xml")
+
+
 @app.route("/llms.txt")
 def llms_txt():
     content = """# RushMail
