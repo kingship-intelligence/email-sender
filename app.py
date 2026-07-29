@@ -1531,6 +1531,23 @@ def tutorial():
     return render_template("tutorial.html")
 
 
+@app.route("/llms.txt")
+def llms_txt():
+    content = """# RushMail
+
+> RushMail is a bulk email campaign tool for teams — extract recipients from files or URLs, personalize messages with merge tags, and send or schedule campaigns through your own SMTP server.
+
+## Product
+- Homepage: https://rushmail.co/
+- Features: recipient extraction, name personalization, AI-assisted copy, SMTP-first delivery, campaign scheduling and analytics.
+- Owned and operated by Kingship Intelligence (https://kingshipintelligence.com/)
+
+## Contact
+- Email: kingshipintelligence@gmail.com
+"""
+    return Response(content, mimetype="text/plain")
+
+
 # ── Init ──────────────────────────────────────────────────────────────────────
 with app.app_context():
     db.create_all()
