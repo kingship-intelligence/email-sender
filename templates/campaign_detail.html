@@ -11,8 +11,15 @@
     {% if recipients %}
     <a href="{{ url_for('campaign_export', campaign_id=campaign.id) }}" class="btn btn--ghost">⬇ Export CSV</a>
     {% endif %}
-    {% if campaign.sent_fail %}
-    <a href="{{ url_for('campaign_resend_failed', campaign_id=campaign.id) }}" class="btn btn--primary">↻ Resend to {{ campaign.sent_fail }} failed</a>
+    {% set pending_count = recipients | selectattr('status', 'equalto', 'pending') | list | length %}
+    {% set failed_count  = recipients | selectattr('status', 'equalto', 'failed')  | list | length %}
+    {% if (pending_count > 0 or failed_count > 0) and campaign.status != 'sending' %}
+    <form method="POST" action="{{ url_for('campaign_retry', campaign_id=campaign.id) }}" style="display:inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn btn--primary">
+        ↻ Retry {{ pending_count + failed_count }} unsent
+      </button>
+    </form>
     {% endif %}
     <a href="{{ url_for('dashboard') }}" class="btn btn--ghost">← Dashboard</a>
   </div>
@@ -67,6 +74,8 @@
           <td>
             {% if r.status == 'sent' %}
               <span class="badge badge--green">Sent</span>
+            {% elif r.status == 'pending' %}
+              <span class="badge badge--gray">Pending</span>
             {% else %}
               <span class="badge badge--red">Failed</span>
             {% endif %}

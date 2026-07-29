@@ -592,6 +592,65 @@ def campaign_resend_failed(campaign_id):
     return render_template("campaign_new.html", prefill=prefill)
 
 
+@app.route("/campaign/<int:campaign_id>/retry", methods=["POST"])
+@login_required
+@subscription_required
+def campaign_retry(campaign_id):
+    """Reset pending/failed recipients and re-run the background send on the same campaign."""
+    campaign = Campaign.query.filter_by(id=campaign_id, user_id=current_user.id).first_or_404()
+
+    if campaign.status == "sending":
+        flash("This campaign is already sending. Please wait for it to finish.", "error")
+        return redirect(url_for("campaign_detail", campaign_id=campaign.id))
+
+    # Collect recipients that still need to be sent
+    pending = CampaignRecipient.query.filter_by(
+        campaign_id=campaign_id, status="pending"
+    ).all()
+    failed = CampaignRecipient.query.filter_by(
+        campaign_id=campaign_id, status="failed"
+    ).all()
+
+    retry_targets = pending + failed
+    if not retry_targets:
+        flash("No pending or failed recipients to retry.", "error")
+        return redirect(url_for("campaign_detail", campaign_id=campaign.id))
+
+    # Reset failed → pending so the background worker picks them up
+    for r in failed:
+        r.status = "pending"
+        r.error  = None
+
+    # Update campaign totals and status
+    sent_ok = CampaignRecipient.query.filter_by(campaign_id=campaign_id, status="sent").count()
+    campaign.sent_fail = 0
+    campaign.sent_ok   = sent_ok
+    campaign.total     = sent_ok + len(retry_targets)
+    campaign.status    = "queued"
+    db.session.commit()
+
+    # Dispatch background send
+    if _scheduler and _scheduler.running:
+        _scheduler.add_job(
+            _send_campaign_background,
+            args=[campaign_id],
+            id=f"send_campaign_{campaign_id}",
+            replace_existing=True,
+        )
+    else:
+        import threading
+        threading.Thread(
+            target=_send_campaign_background, args=[campaign_id], daemon=True
+        ).start()
+
+    flash(
+        f"Retry queued for {len(retry_targets)} recipient{'s' if len(retry_targets) != 1 else ''}. "
+        "Refresh this page in a moment to see progress.",
+        "success",
+    )
+    return redirect(url_for("campaign_detail", campaign_id=campaign.id))
+
+
 @app.route("/campaign/<int:campaign_id>/export.csv")
 @login_required
 @subscription_required
