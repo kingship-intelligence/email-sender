@@ -456,7 +456,11 @@ def subscription_required(f):
 def index():
     if current_user.is_authenticated:
         return redirect(url_for("dashboard"))
-    return render_template("homepage.html", canonical_url=get_domain() + "/")
+    return render_template(
+        "homepage.html",
+        canonical_url=get_domain() + "/",
+        og_image_url=get_domain() + "/static/img/og-image.png",
+    )
 
 
 @app.route("/login", methods=["GET", "POST"])
