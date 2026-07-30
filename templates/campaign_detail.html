@@ -13,7 +13,7 @@
     {% endif %}
     {% set pending_count = recipients | selectattr('status', 'equalto', 'pending') | list | length %}
     {% set failed_count  = recipients | selectattr('status', 'equalto', 'failed')  | list | length %}
-    {% if (pending_count > 0 or failed_count > 0) and campaign.status != 'sending' %}
+    {% if (pending_count > 0 or failed_count > 0) and campaign.status not in ('queued', 'sending') %}
     <form method="POST" action="{{ url_for('campaign_retry', campaign_id=campaign.id) }}" style="display:inline">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <button type="submit" class="btn btn--primary">
@@ -21,30 +21,39 @@
       </button>
     </form>
     {% endif %}
+    {% if failed_count > 0 and campaign.status not in ('queued', 'sending') %}
+    <a href="{{ url_for('campaign_resend_failed', campaign_id=campaign.id) }}" class="btn btn--ghost">
+      🗓 Schedule failed
+    </a>
+    {% endif %}
     <a href="{{ url_for('dashboard') }}" class="btn btn--ghost">← Dashboard</a>
   </div>
 </div>
 
 <div class="stats-row">
   <div class="stat-card">
-    <div class="stat-card__num">{{ campaign.total }}</div>
+    <div class="stat-card__num">{{ metrics.total }}</div>
     <div class="stat-card__label">Total Recipients</div>
   </div>
   <div class="stat-card stat-card--green">
-    <div class="stat-card__num">{{ campaign.sent_ok }}</div>
-    <div class="stat-card__label">Delivered</div>
+    <div class="stat-card__num">{{ metrics.sent }}</div>
+    <div class="stat-card__label">Sent (SMTP Accepted)</div>
   </div>
   <div class="stat-card stat-card--red">
-    <div class="stat-card__num">{{ campaign.sent_fail }}</div>
+    <div class="stat-card__num">{{ metrics.failed }}</div>
     <div class="stat-card__label">Failed</div>
   </div>
-  {% if campaign.total > 0 %}
+  {% if metrics.sent_rate is not none %}
   <div class="stat-card">
-    <div class="stat-card__num">{{ ((campaign.sent_ok / campaign.total) * 100) | round(1) }}%</div>
-    <div class="stat-card__label">Delivery Rate</div>
+    <div class="stat-card__num">{{ metrics.sent_rate }}%</div>
+    <div class="stat-card__label">Sent Rate</div>
   </div>
   {% endif %}
 </div>
+
+<p class="muted small" style="margin-top:.75rem">
+  “Sent (SMTP accepted)” means the sending server accepted the message. Final inbox delivery cannot be confirmed without a provider delivery webhook.
+</p>
 
 <div class="card" style="margin-top:1.5rem">
   <h2 class="card-title">Email Content</h2>
@@ -73,7 +82,7 @@
           <td>{{ r.name or '—' }}</td>
           <td>
             {% if r.status == 'sent' %}
-              <span class="badge badge--green">Sent</span>
+              <span class="badge badge--green">Sent (accepted)</span>
             {% elif r.status == 'pending' %}
               <span class="badge badge--gray">Pending</span>
             {% else %}

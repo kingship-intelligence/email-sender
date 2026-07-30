@@ -25,15 +25,15 @@
   </div>
   <div class="stat-card stat-card--green">
     <div class="stat-card__num" id="dashboard-sent-ok">{{ stats.sent_ok }}</div>
-    <div class="stat-card__label">Emails Delivered</div>
+    <div class="stat-card__label">Sent (SMTP Accepted)</div>
   </div>
   <div class="stat-card stat-card--red">
     <div class="stat-card__num" id="dashboard-sent-fail">{{ stats.sent_fail }}</div>
     <div class="stat-card__label">Failed</div>
   </div>
   <div class="stat-card">
-    <div class="stat-card__num" id="dashboard-delivery-rate">{{ (stats.delivery_rate ~ '%') if stats.delivery_rate is not none else '—' }}</div>
-    <div class="stat-card__label">Delivery Rate</div>
+    <div class="stat-card__num" id="dashboard-sent-rate">{{ (stats.sent_rate ~ '%') if stats.sent_rate is not none else '—' }}</div>
+    <div class="stat-card__label">Sent Rate</div>
   </div>
   <div class="stat-card stat-card--red">
     <div class="stat-card__num" id="dashboard-failure-rate">{{ (stats.failure_rate ~ '%') if stats.failure_rate is not none else '—' }}</div>
@@ -49,7 +49,7 @@
         <th>Created</th>
         <th>Recipients</th>
         <th>Status</th>
-        <th>Delivered</th>
+        <th>Sent</th>
         <th>Failed</th>
         <th></th>
       </tr>
@@ -57,10 +57,10 @@
     <tbody>
       {% for c in campaigns %}
       {% set metrics = campaign_metrics[c.id] %}
-      <tr data-campaign-row data-campaign-id="{{ c.id }}" data-status="{{ c.status }}" data-total="{{ c.total }}" data-sent="{{ metrics.sent }}" data-failed="{{ metrics.failed }}">
+      <tr data-campaign-row data-campaign-id="{{ c.id }}" data-status="{{ c.status }}" data-total="{{ metrics.total }}" data-sent="{{ metrics.sent }}" data-failed="{{ metrics.failed }}">
         <td><strong>{{ c.name }}</strong><br><small class="muted">{{ c.subject }}</small></td>
         <td>{{ c.created_at.strftime('%b %d, %Y') }}</td>
-        <td>{{ c.total }}</td>
+        <td>{{ metrics.total }}</td>
         <td><span class="badge {{ 'badge--orange' if c.status in ('queued', 'sending') else 'badge--gray' }}" data-campaign-status>{{ c.status | capitalize }}</span></td>
         <td><span class="badge badge--green" data-campaign-sent>{{ metrics.sent }}</span></td>
         <td>
@@ -106,12 +106,12 @@
     const sent = rows.reduce((sum, row) => sum + Number(row.dataset.sent || 0), 0);
     const failed = rows.reduce((sum, row) => sum + Number(row.dataset.failed || 0), 0);
     const attempted = sent + failed;
-    const deliveryRate = attempted ? Math.round((sent / attempted) * 1000) / 10 : null;
+    const sentRate = attempted ? Math.round((sent / attempted) * 1000) / 10 : null;
     const failureRate = attempted ? Math.round((failed / attempted) * 1000) / 10 : null;
 
     document.getElementById("dashboard-sent-ok").textContent = sent;
     document.getElementById("dashboard-sent-fail").textContent = failed;
-    document.getElementById("dashboard-delivery-rate").textContent = formatRate(deliveryRate);
+    document.getElementById("dashboard-sent-rate").textContent = formatRate(sentRate);
     document.getElementById("dashboard-failure-rate").textContent = formatRate(failureRate);
   }
 

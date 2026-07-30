@@ -1,10 +1,11 @@
 # RushMail
 
-A self-hostable bulk email campaign platform built with Flask. Users bring their own SMTP credentials, build recipient lists by extracting email addresses from files or web pages, write copy by hand or with AI assistance, and send or schedule campaigns — with per-recipient delivery tracking and Stripe-powered subscriptions.
+A self-hostable bulk email campaign platform built with Flask. Users bring their own SMTP credentials, build recipient lists by extracting email addresses from files or web pages, write copy by hand or with AI assistance, and send or schedule campaigns — with per-recipient SMTP acceptance tracking and Stripe-powered subscriptions.
 
 ## Features
 
-- **Bulk sending** — send a campaign to any list of recipients through the user's own SMTP server, with optional file attachments. Delivery progress streams live to the browser (NDJSON), and every recipient's sent/failed status and error is recorded.
+- **Bulk sending** — send a campaign to any list of recipients through the user's own SMTP server, with optional file attachments. Send progress streams live to the browser, and every recipient's SMTP-accepted/failed status and error is recorded.
+- **Daily send safety limit** — each account is limited to 400 SMTP attempts per UTC day. When a campaign exceeds the remaining allowance, RushMail can send what fits today and create a one-time schedule for the remaining recipients.
 - **Recipient extraction** — upload a `.xlsx`, `.xls`, `.csv`, `.pdf`, `.docx`, or plain-text file, or point at a URL, and RushMail pulls out and deduplicates every email address it finds. URL fetching is SSRF-guarded (private/internal addresses are blocked, redirects re-validated hop by hop).
 - **AI copywriting** — generate a subject line and body from a short campaign brief using OpenAI (`gpt-4o-mini`).
 - **Scheduled campaigns** — one-off, daily, weekly, or monthly sends run by a background APScheduler job, with optimistic locking so concurrent workers never double-send. Each run is recorded as a campaign in the dashboard.
@@ -72,7 +73,7 @@ Note that campaign email itself is always sent through each **user's own SMTP se
 2. **Subscribe** — most app features sit behind an active subscription (`subscription_required`). With Stripe unconfigured, plans can't change, so for local development you may want to flip a user's `plan` column to `pro` directly in the database.
 3. **Configure SMTP** — each user enters their SMTP host, port, credentials, and From address in Settings. The password is Fernet-encrypted before storage.
 4. **Build a campaign** — paste addresses, upload a file, or extract from a URL; write the copy or generate it with AI; optionally attach files (32 MB request limit).
-5. **Send or schedule** — send immediately and watch per-recipient results stream in, or schedule the campaign for later with a recurrence. A background job checks for due schedules every minute.
+5. **Send or schedule** — send immediately and watch per-recipient results stream in, or schedule the campaign for later with a recurrence. Daily overflow is deferred to the next UTC day, and a background job checks for due schedules every minute.
 
 ## Project structure
 

@@ -253,6 +253,7 @@ textarea { resize: vertical; }
   margin-bottom: 1.5rem;
 }
 .notice--warn { background: var(--orange-lt); color: var(--orange-h); border: 1px solid var(--orange-bdr); }
+.notice--info { background: var(--gray-50); color: var(--gray-700); border: 1px solid var(--gray-200); }
 .notice a { color: inherit; font-weight: 700; }
 
 /* ── Table ───────────────────────────────────────────────────── */

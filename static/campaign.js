@@ -472,6 +472,27 @@ if (scheduleCheckbox) {
   });
 }
 
+function tomorrowUtcInputValue() {
+  const tomorrow = new Date();
+  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+  tomorrow.setUTCHours(0, 5, 0, 0);
+  return tomorrow.toISOString().slice(0, 16);
+}
+
+function switchToScheduleMode() {
+  if (!scheduleCheckbox) return;
+  scheduleCheckbox.checked = true;
+  scheduleCheckbox.dispatchEvent(new Event("change"));
+  const firstRun = document.getElementById("schedule-first-run");
+  if (firstRun && !firstRun.value) firstRun.value = tomorrowUtcInputValue();
+}
+
+function resetSendUi() {
+  sendBtn.disabled = false;
+  document.getElementById("step3-actions").style.display = "";
+  document.getElementById("send-progress").style.display = "none";
+}
+
 /* ─── Send ────────────────────────────────────────────────────── */
 if (sendBtn) {
   sendBtn.addEventListener("click", async () => {
@@ -480,24 +501,7 @@ if (sendBtn) {
     const nameEl  = document.getElementById("campaign-name-ai") || document.getElementById("campaign-name-manual");
     const name    = (nameEl ? nameEl.value.trim() : "") || "Campaign";
 
-    // Warn before sending a large campaign via Gmail
     const selectedEmails = getSelectedEmails();
-    if (
-      typeof SMTP_HOST === "string" &&
-      SMTP_HOST.toLowerCase().includes("gmail") &&
-      selectedEmails.length > 500
-    ) {
-      const confirmed = confirm(
-        `⚠️ Gmail sending limit warning\n\n` +
-        `This campaign has ${selectedEmails.length} recipients, but Gmail personal accounts ` +
-        `allow only 500 emails/day (2,000 on Workspace).\n\n` +
-        `Recipients beyond the daily limit will fail with a rate-limit error.\n\n` +
-        `Consider using a dedicated provider (Brevo, SendGrid) for large campaigns, ` +
-        `or splitting this campaign across multiple days.\n\n` +
-        `Send anyway?`
-      );
-      if (!confirmed) return;
-    }
 
     sendBtn.disabled = true;
     document.getElementById("step3-actions").style.display = "none";
@@ -505,9 +509,8 @@ if (sendBtn) {
 
     const bar   = document.getElementById("progress-bar");
     const label = document.getElementById("progress-label");
-    const log   = document.getElementById("send-log");
-    const total = selectedEmails.length;
-    let done = 0, ok = 0, fail = 0;
+    let total = selectedEmails.length;
+    let scheduledCount = 0;
 
     try {
       const fd = new FormData();
@@ -518,24 +521,57 @@ if (sendBtn) {
       fd.append("name", name);
       attachmentFiles.forEach(f => fd.append("attachments", f));
 
-      const resp = await fetch("/send-bulk", {
+      let resp = await fetch("/send-bulk", {
         method: "POST",
         headers: { "X-CSRFToken": getCsrfToken() },
         body: fd
       });
 
-      const data = await resp.json();
+      let data = await resp.json();
+      if (resp.status === 429 && data.code === "daily_limit_exceeded") {
+        const sendNowText = data.remaining > 0
+          ? `Send ${data.remaining} now and schedule ${data.overflow} for tomorrow?`
+          : `Schedule all ${data.overflow} recipients for tomorrow?`;
+        const attachmentNote = attachmentFiles.length > 0
+          ? "\n\nAttachments will be included in today's send only; scheduled recipients will not receive attachments."
+          : "";
+        const confirmed = confirm(`${data.error}\n\n${sendNowText}${attachmentNote}`);
+
+        if (!confirmed) {
+          resetSendUi();
+          switchToScheduleMode();
+          alert("Choose a send time, then click Create Schedule.");
+          return;
+        }
+
+        fd.set("schedule_overflow", "true");
+        resp = await fetch("/send-bulk", {
+          method: "POST",
+          headers: { "X-CSRFToken": getCsrfToken() },
+          body: fd
+        });
+        data = await resp.json();
+      }
+
       if (!resp.ok || data.error) {
         label.textContent = "Error: " + (data.error || "Send failed.");
-        sendBtn.disabled = false;
-        document.getElementById("step3-actions").style.display = "";
-        document.getElementById("send-progress").style.display = "none";
+        resetSendUi();
+        return;
+      }
+
+      if (data.scheduled_only) {
+        alert(data.message);
+        window.location.href = "/scheduled";
         return;
       }
 
       const campaignId = data.campaign_id;
+      total = data.total;
+      scheduledCount = data.scheduled_count || 0;
       bar.style.width = "3%";
-      label.textContent = `Queued — starting send for ${total} recipient${total !== 1 ? "s" : ""}…`;
+      label.textContent = scheduledCount > 0
+        ? `Queued ${total} for today; ${scheduledCount} scheduled for tomorrow…`
+        : `Queued — starting send for ${total} recipient${total !== 1 ? "s" : ""}…`;
 
       // Poll /campaign/<id>/status every 2s until completed
       const poll = setInterval(async () => {
@@ -554,7 +590,8 @@ if (sendBtn) {
             const ok   = s.sent   || 0;
             const fail = s.failed || 0;
             bar.style.width = "100%";
-            label.textContent = `Done — ${ok} delivered, ${fail} failed.`;
+            label.textContent = `Done — ${ok} sent (SMTP accepted), ${fail} failed.` +
+              (scheduledCount ? ` ${scheduledCount} scheduled for tomorrow.` : "");
             document.getElementById("send-progress").style.display = "none";
             document.getElementById("done-ok").textContent   = ok;
             document.getElementById("done-fail").textContent = fail;

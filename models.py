@@ -93,3 +93,15 @@ class ScheduledCampaign(db.Model):
             return data if isinstance(data, dict) else {}
         except ValueError:
             return {}
+
+
+class DailySendUsage(db.Model):
+    __tablename__ = "daily_send_usage"
+    __table_args__ = (
+        db.UniqueConstraint("user_id", "usage_date", name="uq_daily_send_usage_user_date"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    usage_date = db.Column(db.Date, nullable=False)
+    attempt_count = db.Column(db.Integer, default=0, nullable=False)

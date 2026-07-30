@@ -10,6 +10,12 @@
   </div>
 </div>
 
+<div class="notice {{ 'notice--warn' if daily_quota.remaining < 50 else 'notice--info' }}">
+  <strong>Daily sending limit:</strong>
+  {{ daily_quota.used }} of {{ daily_quota.limit }} attempts used today.
+  If a scheduled run exceeds the {{ daily_quota.remaining }} attempts remaining today, RushMail automatically schedules the remainder for the next UTC day.
+</div>
+
 <div class="two-col">
 
   <!-- ── Create form ── -->

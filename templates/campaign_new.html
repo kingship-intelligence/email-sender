@@ -161,6 +161,12 @@
   <div class="card">
     <h2 class="card-title">Review & Send</h2>
 
+    <div class="notice {{ 'notice--warn' if daily_quota.remaining < 50 else 'notice--info' }}" id="daily-quota-notice">
+      <strong>Daily sending limit:</strong>
+      {{ daily_quota.used }} of {{ daily_quota.limit }} attempts used today.
+      You can send {{ daily_quota.remaining }} more before midnight UTC; additional recipients can be scheduled for tomorrow.
+    </div>
+
     <div class="review-grid">
       <div class="review-item">
         <span class="review-label">Recipients</span>
@@ -229,7 +235,7 @@
       <div class="send-summary">
         <div class="summary-stat summary-stat--green">
           <span class="stat-num" id="done-ok">0</span>
-          <span class="stat-label">Delivered</span>
+          <span class="stat-label">Sent (SMTP accepted)</span>
         </div>
         <div class="summary-stat summary-stat--red">
           <span class="stat-num" id="done-fail">0</span>
@@ -310,4 +316,3 @@
 </script>
 <script src="/static/campaign.js"></script>
 {% endblock %}
-

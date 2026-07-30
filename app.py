@@ -27,6 +27,7 @@ from flask_limiter.util import get_remote_address
 from cryptography.fernet import Fernet
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from apscheduler.schedulers.background import BackgroundScheduler
+from sqlalchemy.exc import IntegrityError
 
 # Module-level scheduler reference (set at startup) and attachment store
 _scheduler = None
@@ -39,7 +40,9 @@ import openpyxl
 import csv
 import io
 
-from models import db, User, Campaign, CampaignRecipient, ScheduledCampaign
+from models import (
+    db, User, Campaign, CampaignRecipient, ScheduledCampaign, DailySendUsage,
+)
 
 app = Flask(__name__)
 
@@ -104,6 +107,105 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
+DAILY_SEND_LIMIT = 400
+
+
+def _utc_tomorrow_start(now=None):
+    now = now or datetime.utcnow()
+    return (now + timedelta(days=1)).replace(hour=0, minute=5, second=0, microsecond=0)
+
+
+def _seed_daily_send_count(user_id: int, usage_date) -> int:
+    day_start = datetime.combine(usage_date, datetime.min.time())
+    day_end = day_start + timedelta(days=1)
+    campaigns = Campaign.query.filter(
+        Campaign.user_id == user_id,
+        Campaign.created_at >= day_start,
+        Campaign.created_at < day_end,
+    ).all()
+    return sum((campaign.sent_ok or 0) + (campaign.sent_fail or 0) for campaign in campaigns)
+
+
+def _daily_usage_row(user_id: int) -> DailySendUsage:
+    usage_date = datetime.utcnow().date()
+    usage = DailySendUsage.query.filter_by(
+        user_id=user_id, usage_date=usage_date
+    ).first()
+    if usage:
+        return usage
+
+    try:
+        usage = DailySendUsage(
+            user_id=user_id,
+            usage_date=usage_date,
+            attempt_count=_seed_daily_send_count(user_id, usage_date),
+        )
+        db.session.add(usage)
+        db.session.commit()
+        return usage
+    except IntegrityError:
+        db.session.rollback()
+        return DailySendUsage.query.filter_by(
+            user_id=user_id, usage_date=usage_date
+        ).one()
+
+
+def _daily_quota_status(user_id: int) -> dict:
+    usage = _daily_usage_row(user_id)
+    used = usage.attempt_count or 0
+    return {
+        "limit": DAILY_SEND_LIMIT,
+        "used": used,
+        "remaining": max(DAILY_SEND_LIMIT - used, 0),
+    }
+
+
+def _consume_daily_send_slot(user_id: int) -> bool:
+    usage = _daily_usage_row(user_id)
+    updated = db.session.execute(
+        db.update(DailySendUsage)
+        .where(
+            DailySendUsage.id == usage.id,
+            DailySendUsage.attempt_count < DAILY_SEND_LIMIT,
+        )
+        .values(attempt_count=DailySendUsage.attempt_count + 1)
+    )
+    if updated.rowcount:
+        db.session.commit()
+        return True
+    db.session.rollback()
+    return False
+
+
+def _create_quota_overflow_schedule(
+    user_id: int,
+    name: str,
+    subject: str,
+    body: str,
+    emails: list[str],
+    names_map: dict,
+) -> ScheduledCampaign:
+    overflow_name = (
+        name if name.endswith("(daily limit remainder)")
+        else f"{name} (daily limit remainder)"
+    )
+    overflow_names = {
+        email: names_map[email]
+        for email in emails
+        if email in names_map and names_map[email]
+    }
+    schedule = ScheduledCampaign(
+        user_id=user_id,
+        name=overflow_name,
+        subject=subject,
+        body=body,
+        emails_json=json.dumps(emails),
+        names_json=json.dumps(overflow_names),
+        next_run_at=_utc_tomorrow_start(),
+        frequency="once",
+    )
+    db.session.add(schedule)
+    return schedule
 
 
 def get_fernet():
@@ -567,8 +669,19 @@ def dashboard():
 
     for campaign in campaigns:
         metrics = campaign_metrics[campaign.id]
+        recipient_total = metrics["sent"] + metrics["failed"] + metrics["pending"]
+        if recipient_total == 0 and campaign.total:
+            metrics["sent"] = campaign.sent_ok or 0
+            metrics["failed"] = campaign.sent_fail or 0
+            metrics["pending"] = max(
+                campaign.total - metrics["sent"] - metrics["failed"], 0
+            )
+        metrics["total"] = max(
+            campaign.total or 0,
+            metrics["sent"] + metrics["failed"] + metrics["pending"],
+        )
         attempted = metrics["sent"] + metrics["failed"]
-        metrics["delivery_rate"] = round(metrics["sent"] / attempted * 100, 1) if attempted else None
+        metrics["sent_rate"] = round(metrics["sent"] / attempted * 100, 1) if attempted else None
         metrics["failure_rate"] = round(metrics["failed"] / attempted * 100, 1) if attempted else None
         metrics["unsent"] = metrics["failed"] + metrics["pending"]
         metrics["can_retry"] = (
@@ -581,7 +694,7 @@ def dashboard():
         "sent_fail": sum(metrics["failed"] for metrics in campaign_metrics.values()),
     }
     attempted = stats["sent_ok"] + stats["sent_fail"]
-    stats["delivery_rate"] = round(stats["sent_ok"] / attempted * 100, 1) if attempted else None
+    stats["sent_rate"] = round(stats["sent_ok"] / attempted * 100, 1) if attempted else None
     stats["failure_rate"] = round(stats["sent_fail"] / attempted * 100, 1) if attempted else None
     return render_template(
         "dashboard.html",
@@ -596,7 +709,10 @@ def dashboard():
 @login_required
 @subscription_required
 def campaign_new():
-    return render_template("campaign_new.html")
+    return render_template(
+        "campaign_new.html",
+        daily_quota=_daily_quota_status(current_user.id),
+    )
 
 
 @app.route("/campaign/<int:campaign_id>")
@@ -605,7 +721,28 @@ def campaign_new():
 def campaign_detail(campaign_id):
     campaign = Campaign.query.filter_by(id=campaign_id, user_id=current_user.id).first_or_404()
     recipients = CampaignRecipient.query.filter_by(campaign_id=campaign.id).all()
-    return render_template("campaign_detail.html", campaign=campaign, recipients=recipients)
+    if recipients:
+        sent = sum(1 for recipient in recipients if recipient.status == "sent")
+        failed = sum(1 for recipient in recipients if recipient.status == "failed")
+        pending = sum(1 for recipient in recipients if recipient.status == "pending")
+    else:
+        sent = campaign.sent_ok or 0
+        failed = campaign.sent_fail or 0
+        pending = max((campaign.total or 0) - sent - failed, 0)
+    attempted = sent + failed
+    metrics = {
+        "total": max(campaign.total or 0, sent + failed + pending),
+        "sent": sent,
+        "failed": failed,
+        "pending": pending,
+        "sent_rate": round(sent / attempted * 100, 1) if attempted else None,
+    }
+    return render_template(
+        "campaign_detail.html",
+        campaign=campaign,
+        recipients=recipients,
+        metrics=metrics,
+    )
 
 
 @app.route("/campaign/<int:campaign_id>/resend-failed")
@@ -627,7 +764,11 @@ def campaign_resend_failed(campaign_id):
         "body": campaign.body or "",
         "emails": failed,
     }
-    return render_template("campaign_new.html", prefill=prefill)
+    return render_template(
+        "campaign_new.html",
+        prefill=prefill,
+        daily_quota=_daily_quota_status(current_user.id),
+    )
 
 
 @app.route("/campaign/<int:campaign_id>/retry", methods=["POST"])
@@ -652,6 +793,15 @@ def campaign_retry(campaign_id):
     retry_targets = pending + failed
     if not retry_targets:
         flash("No pending or failed recipients to retry.", "error")
+        return redirect(url_for("campaign_detail", campaign_id=campaign.id))
+
+    quota = _daily_quota_status(current_user.id)
+    if len(retry_targets) > quota["remaining"]:
+        flash(
+            f"Only {quota['remaining']} of {DAILY_SEND_LIMIT} daily sends remain. "
+            "Open Resend Failed and schedule the remaining recipients for tomorrow.",
+            "error",
+        )
         return redirect(url_for("campaign_detail", campaign_id=campaign.id))
 
     # Reset failed → pending so the background worker picks them up
@@ -981,7 +1131,35 @@ def _send_campaign_background(campaign_id: int):
             _mark_pending_recipients_failed(campaign, str(e))
             return
 
-        for r in pending:
+        for index, r in enumerate(pending):
+            if not _consume_daily_send_slot(campaign.user_id):
+                blocked = pending[index:]
+                _create_quota_overflow_schedule(
+                    campaign.user_id,
+                    campaign.name,
+                    campaign.subject or "",
+                    campaign.body or "",
+                    [recipient.email for recipient in blocked],
+                    {
+                        recipient.email: recipient.name
+                        for recipient in blocked
+                        if recipient.name
+                    },
+                )
+                quota_error = (
+                    f"RushMail's {DAILY_SEND_LIMIT}-email daily limit has been reached. "
+                    "This recipient was scheduled automatically for tomorrow."
+                )
+                for recipient in blocked:
+                    recipient.status = "failed"
+                    recipient.error = quota_error
+                fail += len(blocked)
+                campaign.sent_ok = ok
+                campaign.sent_fail = fail
+                campaign.status = "completed"
+                db.session.commit()
+                break
+
             try:
                 msg = MIMEMultipart("mixed")
                 msg["From"]    = from_addr
@@ -1055,6 +1233,10 @@ def send_bulk():
         emails = json.loads(emails_raw)
     except Exception:
         return jsonify({"error": "Invalid emails payload."}), 400
+    if not isinstance(emails, list):
+        return jsonify({"error": "Invalid emails payload."}), 400
+    emails = [str(email).strip().lower() for email in emails if str(email).strip()]
+    emails = list(dict.fromkeys(emails))
 
     try:
         names_map = json.loads(names_raw)
@@ -1070,6 +1252,50 @@ def send_bulk():
     if not current_user.smtp_host:
         return jsonify({"error": "SMTP is not configured. Go to Settings."}), 400
 
+    quota = _daily_quota_status(current_user.id)
+    schedule_overflow = request.form.get("schedule_overflow") == "true"
+    overflow_count = max(len(emails) - quota["remaining"], 0)
+    if overflow_count and not schedule_overflow:
+        return jsonify({
+            "code": "daily_limit_exceeded",
+            "error": (
+                f"RushMail allows {DAILY_SEND_LIMIT} email attempts per UTC day. "
+                f"You have {quota['remaining']} remaining today. "
+                f"Schedule the other {overflow_count} for tomorrow."
+            ),
+            "daily_limit": DAILY_SEND_LIMIT,
+            "used_today": quota["used"],
+            "remaining": quota["remaining"],
+            "overflow": overflow_count,
+            "scheduled_for": _utc_tomorrow_start().isoformat(),
+        }), 429
+
+    send_emails = emails[:quota["remaining"]]
+    overflow_emails = emails[quota["remaining"]:]
+    overflow_schedule = None
+    if overflow_emails:
+        overflow_schedule = _create_quota_overflow_schedule(
+            current_user.id,
+            campaign_name,
+            subject,
+            body,
+            overflow_emails,
+            names_map,
+        )
+
+    if not send_emails:
+        db.session.commit()
+        return jsonify({
+            "ok": True,
+            "scheduled_only": True,
+            "scheduled_count": len(overflow_emails),
+            "scheduled_for": overflow_schedule.next_run_at.isoformat(),
+            "message": (
+                f"Today's {DAILY_SEND_LIMIT}-email limit is reached. "
+                f"Scheduled all {len(overflow_emails)} recipients for tomorrow."
+            ),
+        })
+
     # Read attachments into memory before the request context closes
     attachments = []
     for att_file in request.files.getlist("attachments"):
@@ -1083,13 +1309,13 @@ def send_bulk():
         name=campaign_name,
         subject=subject,
         body=body,
-        total=len(emails),
+        total=len(send_emails),
         status="queued",
     )
     db.session.add(campaign)
     db.session.flush()
 
-    for email in emails:
+    for email in send_emails:
         db.session.add(CampaignRecipient(
             campaign_id=campaign.id,
             email=email,
@@ -1116,7 +1342,12 @@ def send_bulk():
             target=_send_campaign_background, args=[campaign_id], daemon=True
         ).start()
 
-    return jsonify({"campaign_id": campaign_id, "total": len(emails)})
+    return jsonify({
+        "campaign_id": campaign_id,
+        "total": len(send_emails),
+        "scheduled_count": len(overflow_emails),
+        "scheduled_for": overflow_schedule.next_run_at.isoformat() if overflow_schedule else None,
+    })
 
 
 @app.route("/campaign/<int:campaign_id>/status")
@@ -1128,17 +1359,21 @@ def campaign_status(campaign_id):
     sent    = CampaignRecipient.query.filter_by(campaign_id=campaign_id, status="sent").count()
     failed  = CampaignRecipient.query.filter_by(campaign_id=campaign_id, status="failed").count()
     pending = CampaignRecipient.query.filter_by(campaign_id=campaign_id, status="pending").count()
+    if sent + failed + pending == 0 and campaign.total:
+        sent = campaign.sent_ok or 0
+        failed = campaign.sent_fail or 0
+        pending = max(campaign.total - sent - failed, 0)
 
     payload = {
         "campaign_id": campaign_id,
         "status":      campaign.status,
-        "total":       campaign.total,
+        "total":       max(campaign.total or 0, sent + failed + pending),
         "sent":        sent,
         "failed":      failed,
         "pending":     pending,
     }
     attempted = sent + failed
-    payload["delivery_rate"] = round(sent / attempted * 100, 1) if attempted else None
+    payload["sent_rate"] = round(sent / attempted * 100, 1) if attempted else None
     payload["failure_rate"] = round(failed / attempted * 100, 1) if attempted else None
     payload["can_retry"] = (
         failed + pending > 0 and campaign.status not in ("queued", "sending")
@@ -1189,6 +1424,14 @@ def settings_test_email():
     """Send a test email to the user's own address using their saved SMTP settings."""
     if not (current_user.smtp_host and current_user.smtp_user and current_user.smtp_pass_enc):
         return jsonify({"error": "Save your SMTP settings first, then send a test."}), 400
+    quota = _daily_quota_status(current_user.id)
+    if quota["remaining"] == 0:
+        return jsonify({
+            "error": (
+                f"Today's {DAILY_SEND_LIMIT}-email limit is reached. "
+                "Try the SMTP test again tomorrow."
+            )
+        }), 429
     try:
         smtp_pass = decrypt_password(current_user.smtp_pass_enc)
     except Exception:
@@ -1206,6 +1449,10 @@ def settings_test_email():
     msg["To"] = to_addr
 
     try:
+        if not _consume_daily_send_slot(current_user.id):
+            return jsonify({
+                "error": f"Today's {DAILY_SEND_LIMIT}-email limit is reached."
+            }), 429
         if current_user.smtp_use_tls:
             server = smtplib.SMTP(current_user.smtp_host, current_user.smtp_port, timeout=15)
             server.ehlo()
@@ -1345,7 +1592,19 @@ def _fire_scheduled_campaign(sc_id: int, smtp_cfg: dict):
         subject = sc.subject
         body = sc.body
         from_addr = smtp_cfg["from"] or smtp_cfg["user"]
-        ok = fail = 0
+        quota = _daily_quota_status(sc.user_id)
+        send_now = emails[:quota["remaining"]]
+        deferred = emails[quota["remaining"]:]
+        results = []
+
+        if not send_now:
+            if deferred:
+                _create_quota_overflow_schedule(
+                    sc.user_id, sc.name, subject, body, deferred, names_map
+                )
+                db.session.commit()
+            return
+
         server = None
         try:
             if smtp_cfg["use_tls"]:
@@ -1355,33 +1614,68 @@ def _fire_scheduled_campaign(sc_id: int, smtp_cfg: dict):
             else:
                 server = smtplib.SMTP_SSL(smtp_cfg["host"], smtp_cfg["port"], timeout=20)
             server.login(smtp_cfg["user"], smtp_cfg["pass"])
-            for addr in emails:
+        except Exception as error:
+            results = [
+                (
+                    addr,
+                    resolve_recipient_name(addr, names_map),
+                    "failed",
+                    str(error),
+                    None,
+                )
+                for addr in send_now
+            ]
+        else:
+            for index, addr in enumerate(send_now):
+                if not _consume_daily_send_slot(sc.user_id):
+                    deferred = send_now[index:] + deferred
+                    break
+
+                name = resolve_recipient_name(addr, names_map)
                 try:
-                    name = resolve_recipient_name(addr, names_map)
                     msg = MIMEMultipart("mixed")
                     msg["From"] = from_addr
                     msg["To"] = addr
                     msg["Subject"] = personalize_text(subject, addr, name)
                     msg.attach(MIMEText(personalize_text(body, addr, name), "html"))
                     server.sendmail(from_addr, addr, msg.as_string())
-                    ok += 1
-                except Exception:
-                    fail += 1
-            server.quit()
-        except Exception:
-            fail += len(emails)
+                    results.append((addr, name, "sent", "", datetime.utcnow()))
+                except Exception as error:
+                    results.append((addr, name, "failed", str(error), None))
+            try:
+                server.quit()
+            except Exception:
+                pass
+
+        if deferred:
+            _create_quota_overflow_schedule(
+                sc.user_id, sc.name, subject, body, deferred, names_map
+            )
+
         # Record as a Campaign for history
+        ok = sum(1 for result in results if result[2] == "sent")
+        fail = len(results) - ok
         c = Campaign(
             user_id=sc.user_id,
             name=f"[Scheduled] {sc.name}",
             subject=subject,
             body=body,
-            total=len(emails),
+            total=len(results),
             sent_ok=ok,
             sent_fail=fail,
             status="completed",
         )
         db.session.add(c)
+        db.session.flush()
+        for addr, name, status, error, sent_at in results:
+            db.session.add(CampaignRecipient(
+                campaign_id=c.id,
+                email=addr,
+                name=name or None,
+                status=status,
+                error=error or None,
+                sent_at=sent_at,
+            ))
         db.session.commit()
 
 
@@ -1522,7 +1816,11 @@ def scheduled():
         return redirect(url_for("scheduled"))
 
     schedules = ScheduledCampaign.query.filter_by(user_id=current_user.id).order_by(ScheduledCampaign.created_at.desc()).all()
-    return render_template("scheduled.html", schedules=schedules)
+    return render_template(
+        "scheduled.html",
+        schedules=schedules,
+        daily_quota=_daily_quota_status(current_user.id),
+    )
 
 
 @app.route("/campaign/schedule", methods=["POST"])
@@ -1650,7 +1948,7 @@ def llms_txt():
 
 ## Product
 - Homepage: https://rushmail.co/
-- Features: recipient extraction, name personalization, AI-assisted copy, SMTP-first delivery, campaign scheduling and analytics.
+- Features: recipient extraction, name personalization, AI-assisted copy, SMTP acceptance tracking, campaign scheduling and analytics.
 - Owned and operated by Kingship Intelligence (https://kingshipintelligence.com/)
 
 ## Contact
