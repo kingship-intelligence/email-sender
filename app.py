@@ -1,3 +1,5 @@
+# Note to self to modularize this code base
+
 import os
 import re
 import json
