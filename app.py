@@ -2000,7 +2000,7 @@ with app.app_context():
 # Start background scheduler (only in the reloader child in dev; always in prod)
 if os.environ.get("WERKZEUG_RUN_MAIN") == "true" or not app.debug:
     _scheduler = BackgroundScheduler(daemon=True)
-    _scheduler.add_job(run_scheduled_campaigns, "interval", minutes=1, max_instances=1)
+    _scheduler.add_job(run_scheduled_campaigns, "interval", hours=1, max_instances=1)
     _scheduler.start()
     print("[scheduler] started")
 
