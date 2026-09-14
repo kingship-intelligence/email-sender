@@ -1,0 +1,1 @@
+- [Database wake-up connections](database-wakeup-connections.md) — pooled connections must be validated because production database suspension invalidates idle SSL sessions.
