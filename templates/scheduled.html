@@ -141,7 +141,7 @@
     [{ header: [1, 2, 3, false] }],
     [{ list: 'ordered' }, { list: 'bullet' }],
     [{ indent: '-1' }, { indent: '+1' }, { align: [] }],
-    ['link', 'clean']
+    ['link', 'image', 'clean']
   ];
   const schedQuill = new Quill('#sched-body-editor', {
     theme: 'snow',
@@ -156,7 +156,8 @@
   document.querySelector('form').addEventListener('submit', function(e) {
     const html = schedQuill.root.innerHTML;
     const text = schedQuill.getText().trim();
-    if (!text) {
+    const hasImage = Boolean(schedQuill.root.querySelector('img'));
+    if (!text && !hasImage) {
       e.preventDefault();
       alert('Please write an email body before saving.');
       return;

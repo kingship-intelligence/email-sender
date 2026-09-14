@@ -111,6 +111,7 @@
     <div class="field">
       <label>Email body</label>
       <div id="body-editor" style="height:240px;background:#fff;border-radius:6px;"></div>
+      <p class="field__hint">Use the picture icon in the toolbar to place an image inside the email.</p>
       <textarea id="body-input" style="display:none"></textarea>
     </div>
 
@@ -301,12 +302,12 @@
     [{ header: [1, 2, 3, false] }],
     [{ list: 'ordered' }, { list: 'bullet' }],
     [{ indent: '-1' }, { indent: '+1' }, { align: [] }],
-    ['link', 'clean']
+    ['link', 'image', 'clean']
   ];
 
   const bodyQuill = new Quill('#body-editor', {
     theme: 'snow',
-    placeholder: 'Write your email here — use the toolbar to bold, italicise, change font, indent…',
+    placeholder: 'Write your email here — use the toolbar to format text or insert a picture…',
     modules: { toolbar: toolbarOptions }
   });
 

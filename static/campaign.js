@@ -414,7 +414,8 @@ document.getElementById("step2-next").addEventListener("click", () => {
   const subject  = document.getElementById("subject-input").value.trim();
   const bodyHtml = bodyQuill.root.innerHTML;
   const bodyText = bodyQuill.getText().trim();
-  if (!subject || !bodyText) {
+  const hasImage = Boolean(bodyQuill.root.querySelector("img"));
+  if (!subject || (!bodyText && !hasImage)) {
     alert("Please fill in the subject and body.");
     return;
   }

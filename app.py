@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
+from email.mime.image import MIMEImage
 from email import encoders
 from functools import wraps
 from urllib.parse import urlparse
@@ -406,6 +407,47 @@ def _smtp_send(host, port, user, password, use_tls, from_addr, to_addr, msg_str)
         return True
     except Exception:
         return False
+
+
+_INLINE_IMAGE_RE = re.compile(
+    r"""data:image/(?P<subtype>png|jpe?g|gif|webp);base64,(?P<data>[^"']+)""",
+    re.IGNORECASE,
+)
+
+
+def _attach_html_body(msg: MIMEMultipart, body_html: str) -> None:
+    """Attach HTML and convert embedded data images into inline CID parts."""
+    inline_images = []
+
+    def replace_image(match):
+        subtype = match.group("subtype").lower()
+        if subtype == "jpg":
+            subtype = "jpeg"
+        try:
+            image_data = base64.b64decode(match.group("data"), validate=True)
+        except (ValueError, TypeError):
+            return match.group(0)
+        cid = f"rushmail-{hashlib.sha256(image_data).hexdigest()[:24]}"
+        inline_images.append((cid, subtype, image_data))
+        return f"cid:{cid}"
+
+    rendered_html = _INLINE_IMAGE_RE.sub(replace_image, body_html)
+    if not inline_images:
+        msg.attach(MIMEText(rendered_html, "html"))
+        return
+
+    related = MIMEMultipart("related")
+    related.attach(MIMEText(rendered_html, "html"))
+    seen = set()
+    for cid, subtype, image_data in inline_images:
+        if cid in seen:
+            continue
+        seen.add(cid)
+        image = MIMEImage(image_data, _subtype=subtype)
+        image.add_header("Content-ID", f"<{cid}>")
+        image.add_header("Content-Disposition", "inline", filename=f"{cid}.{subtype}")
+        related.attach(image)
+    msg.attach(related)
 
 
 def _send_auth_email(user: "User", subject: str, body_html: str) -> bool:
@@ -1176,7 +1218,10 @@ def _send_campaign_background(campaign_id: int):
                 msg["From"]    = from_addr
                 msg["To"]      = r.email
                 msg["Subject"] = personalize_text(subject, r.email, r.name or "")
-                msg.attach(MIMEText(personalize_text(body, r.email, r.name or ""), "html"))
+                _attach_html_body(
+                    msg,
+                    personalize_text(body, r.email, r.name or ""),
+                )
                 for att_name, att_data, att_mime in attachments:
                     maintype, subtype = att_mime.split("/", 1) if "/" in att_mime else ("application", "octet-stream")
                     part = MIMEBase(maintype, subtype)
@@ -1648,7 +1693,7 @@ def _fire_scheduled_campaign(sc_id: int, smtp_cfg: dict):
                     msg["From"] = from_addr
                     msg["To"] = addr
                     msg["Subject"] = personalize_text(subject, addr, name)
-                    msg.attach(MIMEText(personalize_text(body, addr, name), "html"))
+                    _attach_html_body(msg, personalize_text(body, addr, name))
                     server.sendmail(from_addr, addr, msg.as_string())
                     results.append((addr, name, "sent", "", datetime.utcnow()))
                 except Exception as error:
