@@ -58,6 +58,13 @@ app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get(
     "DATABASE_URL", "sqlite:///rushmail.db"
 ).replace("postgres://", "postgresql://")
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+# Replit's production database can suspend between hourly scheduler checks.
+# Validate pooled connections before reuse so a stale SSL connection is
+# transparently discarded and replaced instead of breaking a request.
+app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
+    "pool_pre_ping": True,
+    "pool_recycle": 1800,
+}
 app.config["WTF_CSRF_TIME_LIMIT"] = None
 app.config["MAX_CONTENT_LENGTH"] = 32 * 1024 * 1024  # 32 MB upload limit
 
