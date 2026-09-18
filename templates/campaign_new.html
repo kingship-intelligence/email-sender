@@ -1,12 +1,16 @@
 {% extends "base.html" %}
-{% block title %}New Campaign{% endblock %}
+{% block title %}{{ 'Edit Draft' if draft else 'New Campaign' }}{% endblock %}
 {% block extra_head %}<link href="https://cdn.jsdelivr.net/npm/quill@2/dist/quill.snow.css" rel="stylesheet" />{% endblock %}
 
 {% block content %}
 <div class="page-header">
   <div>
-    <h1 class="page-title">New Campaign</h1>
+    <h1 class="page-title">{{ 'Edit Draft' if draft else 'New Campaign' }}</h1>
     <p class="page-sub">Extract emails, compose your message, and send</p>
+  </div>
+  <div class="page-header__actions">
+    <span class="muted small" id="draft-save-status"></span>
+    <button type="button" class="btn btn--ghost" id="save-draft-btn">Save as Draft</button>
   </div>
 </div>
 
@@ -289,6 +293,7 @@
   const IS_PRO = true;
   const SEND_LIMIT = null;
   const SMTP_HOST = {{ (current_user.smtp_host or '') | tojson }};
+  const DRAFT_ID = {{ (draft.id if draft else none) | tojson }};
   {% if prefill %}
   const PREFILL = {{ prefill | tojson }};
   {% else %}

@@ -68,6 +68,9 @@
           <small class="muted" data-campaign-failure-rate>{{ ('(' ~ metrics.failure_rate ~ '%)') if metrics.failure_rate is not none else '' }}</small>
         </td>
         <td>
+          {% if c.status == 'draft' %}
+          <a href="{{ url_for('campaign_edit', campaign_id=c.id) }}" class="btn btn--sm btn--primary">Continue editing</a>
+          {% else %}
           <a href="{{ url_for('campaign_detail', campaign_id=c.id) }}" class="btn btn--sm btn--ghost">View</a>
           <form method="POST" action="{{ url_for('campaign_retry', campaign_id=c.id) }}" data-campaign-retry style="display:{{ 'inline' if metrics.can_retry else 'none' }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -75,6 +78,7 @@
               ↻ Resend {{ metrics.unsent }} unsent
             </button>
           </form>
+          {% endif %}
         </td>
       </tr>
       {% endfor %}

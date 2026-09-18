@@ -765,7 +765,100 @@ def campaign_new():
     return render_template(
         "campaign_new.html",
         daily_quota=_daily_quota_status(current_user.id),
+        draft=None,
+        prefill=None,
     )
+
+
+@app.route("/campaign/<int:campaign_id>/edit")
+@login_required
+@subscription_required
+def campaign_edit(campaign_id):
+    draft = Campaign.query.filter_by(
+        id=campaign_id,
+        user_id=current_user.id,
+        status="draft",
+    ).first_or_404()
+    recipients = CampaignRecipient.query.filter_by(campaign_id=draft.id).all()
+    prefill = {
+        "name": draft.name or "",
+        "subject": draft.subject or "",
+        "body": draft.body or "",
+        "body_is_html": True,
+        "emails": [recipient.email for recipient in recipients],
+        "names": {
+            recipient.email: recipient.name
+            for recipient in recipients
+            if recipient.name
+        },
+    }
+    return render_template(
+        "campaign_new.html",
+        daily_quota=_daily_quota_status(current_user.id),
+        draft=draft,
+        prefill=prefill,
+    )
+
+
+@app.route("/campaign/draft", methods=["POST"])
+@login_required
+@subscription_required
+def campaign_save_draft():
+    data = request.get_json(silent=True) or {}
+    draft_id = data.get("draft_id")
+    draft = None
+    if draft_id:
+        try:
+            draft_id = int(draft_id)
+        except (TypeError, ValueError):
+            return jsonify({"error": "Invalid draft ID."}), 400
+        draft = Campaign.query.filter_by(
+            id=draft_id,
+            user_id=current_user.id,
+            status="draft",
+        ).first()
+        if not draft:
+            return jsonify({"error": "Draft not found."}), 404
+
+    emails = data.get("emails") or []
+    if not isinstance(emails, list):
+        return jsonify({"error": "Invalid recipient list."}), 400
+    emails = [str(email).strip().lower() for email in emails if str(email).strip()]
+    emails = list(dict.fromkeys(emails))
+
+    names_map = data.get("names") or {}
+    if not isinstance(names_map, dict):
+        names_map = {}
+
+    if draft is None:
+        draft = Campaign(user_id=current_user.id, status="draft")
+        db.session.add(draft)
+
+    draft.name = (data.get("name") or "Untitled Campaign").strip() or "Untitled Campaign"
+    draft.subject = (data.get("subject") or "").strip()
+    draft.body = (data.get("body") or "").strip()
+    draft.status = "draft"
+    draft.total = len(emails)
+    draft.sent_ok = 0
+    draft.sent_fail = 0
+    db.session.flush()
+
+    CampaignRecipient.query.filter_by(campaign_id=draft.id).delete(
+        synchronize_session=False
+    )
+    for email in emails:
+        db.session.add(CampaignRecipient(
+            campaign_id=draft.id,
+            email=email,
+            name=resolve_recipient_name(email, names_map) or None,
+            status="pending",
+        ))
+    db.session.commit()
+    return jsonify({
+        "ok": True,
+        "draft_id": draft.id,
+        "message": "Draft saved.",
+    })
 
 
 @app.route("/campaign/<int:campaign_id>")
@@ -773,6 +866,8 @@ def campaign_new():
 @subscription_required
 def campaign_detail(campaign_id):
     campaign = Campaign.query.filter_by(id=campaign_id, user_id=current_user.id).first_or_404()
+    if campaign.status == "draft":
+        return redirect(url_for("campaign_edit", campaign_id=campaign.id))
     recipients = CampaignRecipient.query.filter_by(campaign_id=campaign.id).all()
     if recipients:
         sent = sum(1 for recipient in recipients if recipient.status == "sent")
@@ -1284,6 +1379,20 @@ def send_bulk():
     subject       = request.form.get("subject", "").strip()
     body          = request.form.get("body", "").strip()
     campaign_name = (request.form.get("name", "Campaign") or "Campaign").strip()
+    draft_id = request.form.get("draft_id", "").strip()
+    draft = None
+    if draft_id:
+        try:
+            draft_id = int(draft_id)
+        except ValueError:
+            return jsonify({"error": "Invalid draft ID."}), 400
+        draft = Campaign.query.filter_by(
+            id=draft_id,
+            user_id=current_user.id,
+            status="draft",
+        ).first()
+        if not draft:
+            return jsonify({"error": "Draft not found."}), 404
 
     try:
         emails = json.loads(emails_raw)
@@ -1302,7 +1411,8 @@ def send_bulk():
         names_map = {}
 
     body_text = re.sub(r"<[^>]+>", "", body).strip()
-    if not emails or not subject or not body_text:
+    has_inline_image = bool(re.search(r"<img\b", body, re.IGNORECASE))
+    if not emails or not subject or (not body_text and not has_inline_image):
         return jsonify({"error": "emails, subject, and body are required."}), 400
 
     if not current_user.smtp_host:
@@ -1340,6 +1450,8 @@ def send_bulk():
         )
 
     if not send_emails:
+        if draft:
+            db.session.delete(draft)
         db.session.commit()
         return jsonify({
             "ok": True,
@@ -1359,18 +1471,23 @@ def send_bulk():
             attachments.append((att_file.filename, att_file.read(),
                                 att_file.mimetype or "application/octet-stream"))
 
-    # Create campaign + recipient rows with status="queued"
-    campaign = Campaign(
-        user_id=current_user.id,
-        name=campaign_name,
-        subject=subject,
-        body=body,
-        total=len(send_emails),
-        status="queued",
-    )
-    db.session.add(campaign)
+    # Create a campaign, or convert the existing draft into the queued campaign.
+    campaign = draft or Campaign(user_id=current_user.id)
+    campaign.name = campaign_name
+    campaign.subject = subject
+    campaign.body = body
+    campaign.total = len(send_emails)
+    campaign.sent_ok = 0
+    campaign.sent_fail = 0
+    campaign.status = "queued"
+    if draft is None:
+        db.session.add(campaign)
     db.session.flush()
 
+    if draft:
+        CampaignRecipient.query.filter_by(campaign_id=campaign.id).delete(
+            synchronize_session=False
+        )
     for email in send_emails:
         db.session.add(CampaignRecipient(
             campaign_id=campaign.id,
@@ -1907,6 +2024,21 @@ def campaign_schedule():
     if errors:
         return jsonify({"error": " ".join(errors)}), 400
 
+    draft = None
+    draft_id = data.get("draft_id")
+    if draft_id:
+        try:
+            draft_id = int(draft_id)
+        except (TypeError, ValueError):
+            return jsonify({"error": "Invalid draft ID."}), 400
+        draft = Campaign.query.filter_by(
+            id=draft_id,
+            user_id=current_user.id,
+            status="draft",
+        ).first()
+        if not draft:
+            return jsonify({"error": "Draft not found."}), 404
+
     sc = ScheduledCampaign(
         user_id=current_user.id,
         name=name,
@@ -1918,6 +2050,8 @@ def campaign_schedule():
         frequency=frequency,
     )
     db.session.add(sc)
+    if draft:
+        db.session.delete(draft)
     db.session.commit()
     return jsonify({
         "ok": True,

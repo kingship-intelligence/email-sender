@@ -20,6 +20,7 @@ let names = {};   // email -> detected/edited display name ("" = none)
 let currentStep = 1;
 let attachmentFiles = [];
 let recipientLimit = 0;
+let draftId = typeof DRAFT_ID !== "undefined" ? DRAFT_ID : null;
 
 /* ─── Name detection & merge tags ────────────────────────────────
    Mirrors the server-side logic: guess a person's name from the
@@ -520,6 +521,7 @@ if (sendBtn) {
       fd.append("subject", subject);
       fd.append("body", body);
       fd.append("name", name);
+      if (draftId) fd.append("draft_id", String(draftId));
       attachmentFiles.forEach(f => fd.append("attachments", f));
 
       let resp = await fetch("/send-bulk", {
@@ -567,6 +569,7 @@ if (sendBtn) {
       }
 
       const campaignId = data.campaign_id;
+      draftId = null;
       total = data.total;
       scheduledCount = data.scheduled_count || 0;
       bar.style.width = "3%";
@@ -699,6 +702,7 @@ if (scheduleBtn) {
         body,
         emails: selectedEmails,
         names,
+        draft_id: draftId,
         frequency,
         first_run: firstRun
       });
@@ -709,6 +713,7 @@ if (scheduleBtn) {
         scheduleBtn.textContent = "🗓️ Create Schedule";
         return;
       }
+      draftId = null;
       window.location.href = "/scheduled";
     } catch (e) {
       alert("Could not create schedule: " + e.message);
@@ -721,10 +726,13 @@ if (scheduleBtn) {
 /* ─── Prefill (e.g. "Resend to failed" from a campaign page) ──── */
 if (typeof PREFILL !== "undefined" && PREFILL) {
   emails = Array.isArray(PREFILL.emails) ? PREFILL.emails.slice() : [];
+  names = PREFILL.names && typeof PREFILL.names === "object" ? { ...PREFILL.names } : {};
   renderChips();
   if (PREFILL.subject) document.getElementById("subject-input").value = PREFILL.subject;
   if (PREFILL.body) {
-    const html = '<p>' + PREFILL.body.replace(/\n\n+/g, '</p><p>').replace(/\n/g, '<br>') + '</p>';
+    const html = PREFILL.body_is_html
+      ? PREFILL.body
+      : '<p>' + PREFILL.body.replace(/\n\n+/g, '</p><p>').replace(/\n/g, '<br>') + '</p>';
     bodyQuill.clipboard.dangerouslyPasteHTML(html);
   }
   if (PREFILL.name) {
@@ -734,4 +742,44 @@ if (typeof PREFILL !== "undefined" && PREFILL) {
   if (emails.length) {
     setExtractStatus("info", `Loaded ${emails.length} recipient${emails.length !== 1 ? "s" : ""} — review the list and continue.`);
   }
+}
+
+/* ─── Drafts ──────────────────────────────────────────────────── */
+const saveDraftBtn = document.getElementById("save-draft-btn");
+const draftSaveStatus = document.getElementById("draft-save-status");
+
+if (saveDraftBtn) {
+  saveDraftBtn.addEventListener("click", async () => {
+    const nameEl = document.getElementById("campaign-name-ai") || document.getElementById("campaign-name-manual");
+    saveDraftBtn.disabled = true;
+    saveDraftBtn.textContent = "Saving…";
+    if (draftSaveStatus) draftSaveStatus.textContent = "";
+
+    try {
+      const response = await jsonPost("/campaign/draft", {
+        draft_id: draftId,
+        name: (nameEl ? nameEl.value.trim() : "") || "Untitled Campaign",
+        subject: document.getElementById("subject-input").value.trim(),
+        body: bodyQuill.root.innerHTML,
+        emails,
+        names
+      });
+      const data = await response.json();
+      if (!response.ok || data.error) {
+        throw new Error(data.error || "Could not save draft.");
+      }
+      draftId = data.draft_id;
+      if (draftSaveStatus) {
+        draftSaveStatus.textContent = attachmentFiles.length
+          ? "Draft saved. Reattach files when reopening."
+          : "Draft saved.";
+      }
+      window.history.replaceState({}, "", `/campaign/${draftId}/edit`);
+    } catch (error) {
+      if (draftSaveStatus) draftSaveStatus.textContent = `Save failed: ${error.message}`;
+    } finally {
+      saveDraftBtn.disabled = false;
+      saveDraftBtn.textContent = "Save as Draft";
+    }
+  });
 }
