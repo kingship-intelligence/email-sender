@@ -916,6 +916,48 @@ def campaign_resend_failed(campaign_id):
         "campaign_new.html",
         prefill=prefill,
         daily_quota=_daily_quota_status(current_user.id),
+        draft=None,
+    )
+
+
+@app.route("/campaign/<int:campaign_id>/resend")
+@login_required
+@subscription_required
+def campaign_resend(campaign_id):
+    """Open a new campaign pre-filled with the original campaign and contact list."""
+    campaign = Campaign.query.filter_by(
+        id=campaign_id,
+        user_id=current_user.id,
+    ).first_or_404()
+    if campaign.status in ("draft", "queued", "sending"):
+        flash("This campaign must finish sending before it can be resent.", "error")
+        return redirect(url_for("campaign_detail", campaign_id=campaign.id))
+
+    recipients = CampaignRecipient.query.filter_by(campaign_id=campaign.id).all()
+    emails = list(dict.fromkeys(
+        recipient.email for recipient in recipients if recipient.email
+    ))
+    if not emails:
+        flash("This campaign has no saved recipients to resend to.", "error")
+        return redirect(url_for("campaign_detail", campaign_id=campaign.id))
+
+    prefill = {
+        "name": f"{campaign.name} (resend)",
+        "subject": campaign.subject or "",
+        "body": campaign.body or "",
+        "body_is_html": True,
+        "emails": emails,
+        "names": {
+            recipient.email: recipient.name
+            for recipient in recipients
+            if recipient.email and recipient.name
+        },
+    }
+    return render_template(
+        "campaign_new.html",
+        prefill=prefill,
+        daily_quota=_daily_quota_status(current_user.id),
+        draft=None,
     )
 
 

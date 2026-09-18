@@ -11,6 +11,11 @@
     {% if recipients %}
     <a href="{{ url_for('campaign_export', campaign_id=campaign.id) }}" class="btn btn--ghost">⬇ Export CSV</a>
     {% endif %}
+    {% if recipients and campaign.status not in ('draft', 'queued', 'sending') %}
+    <a href="{{ url_for('campaign_resend', campaign_id=campaign.id) }}" class="btn btn--primary">
+      ↻ Resend to same list
+    </a>
+    {% endif %}
     {% set pending_count = recipients | selectattr('status', 'equalto', 'pending') | list | length %}
     {% set failed_count  = recipients | selectattr('status', 'equalto', 'failed')  | list | length %}
     {% if (pending_count > 0 or failed_count > 0) and campaign.status not in ('queued', 'sending') %}
