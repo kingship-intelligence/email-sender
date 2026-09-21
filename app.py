@@ -1,4 +1,5 @@
 import os
+from dotenv import load_dotenv
 from flask import Flask
 from flask_session import Session
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -16,6 +17,7 @@ from routes.settings import settings_bp
 from routes.billing import billing_bp
 from routes.public import public_bp
 
+load_dotenv()
 app = Flask(__name__)
 
 # ── Config ────────────────────────────────────────────────────────────────────
