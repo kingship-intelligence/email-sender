@@ -289,6 +289,7 @@
 
 {% block scripts %}
 <script src="https://cdn.jsdelivr.net/npm/quill@2/dist/quill.js"></script>
+<script src="/static/image-paste.js"></script>
 <script>
   const IS_PRO = true;
   const SEND_LIMIT = null;
@@ -315,6 +316,7 @@
     placeholder: 'Write your email here — use the toolbar to format text or insert a picture…',
     modules: { toolbar: toolbarOptions }
   });
+  enablePastedImages(bodyQuill);
 
   bodyQuill.on('text-change', () => {
     document.getElementById('body-input').value = bodyQuill.root.innerHTML;
