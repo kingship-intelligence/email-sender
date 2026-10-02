@@ -4,13 +4,13 @@ A self-hostable bulk email campaign platform built with Flask. Users bring their
 
 ## Features
 
-- **Bulk sending** — send a campaign to any list of recipients through the user's own SMTP server, with optional file attachments. Send progress streams live to the browser, and every recipient's SMTP-accepted/failed status and error is recorded.
+- **Bulk sending** — send campaigns through the user's own SMTP server with optional file attachments. The browser polls for progress, and every recipient's SMTP-accepted, failed, or suppressed status is recorded. SMTP acceptance is not proof of inbox delivery.
 - **Daily send safety limit** — each account is limited to 400 SMTP attempts per UTC day. When a campaign exceeds the remaining allowance, RushMail can send what fits today and create a one-time schedule for the remaining recipients.
 - **Recipient extraction** — upload a `.xlsx`, `.xls`, `.csv`, `.pdf`, `.docx`, or plain-text file, or point at a URL, and RushMail pulls out and deduplicates every email address it finds. URL fetching is SSRF-guarded (private/internal addresses are blocked, redirects re-validated hop by hop).
 - **AI copywriting** — generate a subject line and body from a short campaign brief using OpenAI (`gpt-4o-mini`).
 - **Scheduled campaigns** — one-off, daily, weekly, or monthly sends run by a background APScheduler job, with optimistic locking so concurrent workers never double-send. Each run is recorded as a campaign in the dashboard.
 - **Accounts and security** — email verification, password reset, bcrypt password hashing with a strength policy, login rate limiting, CSRF protection, and server-side sessions. Per-user SMTP passwords are encrypted at rest with Fernet.
-- **Billing** — free plan (50-email send limit) and a Pro plan via Stripe Checkout, with webhook-driven subscription state and a customer billing portal.
+- **Billing** — an active Pro subscription unlocks campaign features through Stripe Checkout, with webhook-driven subscription state and a customer billing portal.
 
 ## Tech stack
 
@@ -38,11 +38,14 @@ uv sync
 # set the one required environment variable
 export SECRET_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
 
+# create or upgrade the database
+uv run flask --app app db upgrade
+
 # run the dev server (http://localhost:5000)
 uv run python app.py
 ```
 
-Tables are created automatically on first start (`db.create_all()` plus lightweight column migrations). By default data is stored in a local SQLite file (`rushmail.db`).
+Database changes are managed with committed Flask-Migrate/Alembic revisions. Run `uv run flask --app app db upgrade` before each release. By default data is stored in a local SQLite file (`rushmail.db`).
 
 For production, use Gunicorn:
 
@@ -58,6 +61,7 @@ All configuration is via environment variables.
 |---|---|---|
 | `SECRET_KEY` (or `SESSION_SECRET`) | **Yes** | Signs sessions, auth tokens, and derives the Fernet key that encrypts stored SMTP passwords. The app refuses to start without it. Changing it invalidates stored SMTP passwords. |
 | `DATABASE_URL` | No | PostgreSQL connection string. Defaults to SQLite (`rushmail.db`). `postgres://` URLs are rewritten to `postgresql://` automatically. |
+| `APP_DOMAIN` | Production | Public HTTPS origin used to build unsubscribe and billing links, for example `https://rushmail.co`. |
 | `OPENAI_API_KEY` | No | Enables the AI email generator. Without it, `/generate` returns 503. |
 | `STRIPE_SECRET_KEY` | No | Enables billing. Without it, Stripe features are disabled. |
 | `STRIPE_PUBLISHABLE_KEY` | No | Client-side Stripe key. |
@@ -73,7 +77,7 @@ Note that campaign email itself is always sent through each **user's own SMTP se
 2. **Subscribe** — most app features sit behind an active subscription (`subscription_required`). With Stripe unconfigured, plans can't change, so for local development you may want to flip a user's `plan` column to `pro` directly in the database.
 3. **Configure SMTP** — each user enters their SMTP host, port, credentials, and From address in Settings. The password is Fernet-encrypted before storage.
 4. **Build a campaign** — paste addresses, upload a file, or extract from a URL; write the copy or generate it with AI; optionally attach files (32 MB request limit).
-5. **Send or schedule** — send immediately and watch per-recipient results stream in, or schedule the campaign for later with a recurrence. Daily overflow is deferred to the next UTC day, and a background job checks for due schedules every minute.
+5. **Send or schedule** — send immediately and watch per-recipient results update, or schedule the campaign for later with a recurrence. Daily overflow is deferred to the next UTC day, and a background job periodically checks for due schedules.
 
 ## Project structure
 

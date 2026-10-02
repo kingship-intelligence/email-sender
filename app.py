@@ -6,23 +6,30 @@ import base64
 import smtplib
 import ipaddress
 import socket
+import logging
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email.mime.image import MIMEImage
 from email import encoders
+from email.utils import formataddr, formatdate, make_msgid
 from functools import wraps
 from urllib.parse import urlparse
 
 from flask import (
     Flask, render_template, request, jsonify, redirect,
-    url_for, flash, Response, stream_with_context
+    url_for, flash, Response, stream_with_context, session
 )
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from flask_bcrypt import Bcrypt
 from flask_wtf.csrf import CSRFProtect
-from flask_session import Session
+from flask_session.base import ServerSideSessionInterface
+from flask_session.sqlalchemy.sqlalchemy import (
+    SqlAlchemySessionInterface,
+    create_session_model,
+)
+from flask_migrate import Migrate
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from cryptography.fernet import Fernet
@@ -43,6 +50,7 @@ import io
 
 from models import (
     db, User, Campaign, CampaignRecipient, ScheduledCampaign, DailySendUsage,
+    Suppression,
 )
 
 app = Flask(__name__)
@@ -68,11 +76,13 @@ app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
 }
 app.config["WTF_CSRF_TIME_LIMIT"] = None
 app.config["MAX_CONTENT_LENGTH"] = 32 * 1024 * 1024  # 32 MB upload limit
+app.config["APP_DOMAIN"] = os.environ.get("APP_DOMAIN", "https://rushmail.co").rstrip("/")
 
 # ── Server-side sessions ──────────────────────────────────────────────────────
-app.config["SESSION_TYPE"] = "filesystem"
-app.config["SESSION_FILE_DIR"] = os.path.join(os.getcwd(), ".flask_sessions")
-app.config["SESSION_FILE_THRESHOLD"] = 500
+app.config["SESSION_TYPE"] = "sqlalchemy"
+app.config["SESSION_SQLALCHEMY"] = db
+app.config["SESSION_SQLALCHEMY_TABLE"] = "sessions"
+app.config["SESSION_KEY_PREFIX"] = "rushmail:"
 app.config["SESSION_PERMANENT"] = False
 
 # Allow the session cookie to survive being loaded inside a cross-site iframe
@@ -85,9 +95,35 @@ app.config["REMEMBER_COOKIE_SAMESITE"] = "None"
 app.config["REMEMBER_COOKIE_SECURE"] = True
 
 db.init_app(app)
+migrate = Migrate(app, db)
 bcrypt = Bcrypt(app)
 csrf = CSRFProtect(app)
-Session(app)
+
+
+class MigratedSqlAlchemySessionInterface(SqlAlchemySessionInterface):
+    """Flask-Session SQLAlchemy backend without import-time CREATE TABLE."""
+
+    def __init__(self, flask_app, client):
+        self.app = flask_app
+        self.client = client
+        self.sql_session_model = create_session_model(
+            client,
+            flask_app.config["SESSION_SQLALCHEMY_TABLE"],
+        )
+        ServerSideSessionInterface.__init__(
+            self,
+            flask_app,
+            key_prefix=flask_app.config["SESSION_KEY_PREFIX"],
+            permanent=flask_app.config["SESSION_PERMANENT"],
+        )
+
+
+app.session_interface = MigratedSqlAlchemySessionInterface(app, db)
+
+logging.basicConfig(
+    level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
 
 login_manager = LoginManager(app)
 login_manager.login_view = "login"
@@ -271,6 +307,11 @@ _MERGE_TAG_RE = re.compile(
     re.IGNORECASE,
 )
 
+_NAME_TITLES = {
+    "mr", "mr.", "mrs", "mrs.", "ms", "ms.", "miss", "mx", "mx.",
+    "dr", "dr.", "prof", "prof.", "sir", "dame", "rev", "rev.",
+}
+
 
 def personalize_text(text: str, email: str, full_name: str) -> str:
     """Replace merge tags like {{name}}, {{first_name}}, {{email}} with the
@@ -279,11 +320,12 @@ def personalize_text(text: str, email: str, full_name: str) -> str:
     default to "there" so greetings still read naturally.
     """
     parts = (full_name or "").split()
+    name_parts = parts[1:] if parts and parts[0].lower() in _NAME_TITLES else parts
     values = {
         "email": email,
         "name": (full_name or "").strip(),
-        "first_name": parts[0] if parts else "",
-        "last_name": parts[-1] if len(parts) > 1 else "",
+        "first_name": name_parts[0] if name_parts else "",
+        "last_name": name_parts[-1] if len(name_parts) > 1 else "",
     }
 
     def repl(m):
@@ -305,6 +347,45 @@ def resolve_recipient_name(email: str, names_map: dict) -> str:
     return provided or derive_name_from_email(email)
 
 
+def normalize_email(email: str) -> str:
+    return str(email or "").strip().lower()
+
+
+def suppressed_emails(user_id: int, emails) -> set[str]:
+    normalized = {normalize_email(email) for email in emails if normalize_email(email)}
+    if not normalized:
+        return set()
+    return {
+        row.email
+        for row in Suppression.query.filter(
+            Suppression.user_id == user_id,
+            Suppression.email.in_(normalized),
+        ).all()
+    }
+
+
+def is_suppressed(user_id: int, email: str) -> bool:
+    return Suppression.query.filter_by(
+        user_id=user_id,
+        email=normalize_email(email),
+    ).first() is not None
+
+
+def suppress_recipient(user_id: int, email: str, source="unsubscribe") -> Suppression:
+    normalized = normalize_email(email)
+    suppression = Suppression.query.filter_by(user_id=user_id, email=normalized).first()
+    if suppression:
+        return suppression
+    suppression = Suppression(user_id=user_id, email=normalized, source=source)
+    db.session.add(suppression)
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        suppression = Suppression.query.filter_by(user_id=user_id, email=normalized).one()
+    return suppression
+
+
 def extract_emails(text: str) -> list[str]:
     found = EMAIL_RE.findall(text)
     seen = set()
@@ -315,6 +396,50 @@ def extract_emails(text: str) -> list[str]:
             seen.add(e_lower)
             result.append(e_lower)
     return result
+
+
+def extract_contact_names(rows) -> dict[str, str]:
+    """Map emails to names from a table with recognizable contact headers."""
+    normalized_rows = [
+        ["" if value is None else str(value).strip() for value in row]
+        for row in rows
+    ]
+    header_aliases = {
+        "email": {"email", "emailaddress", "emailaddresses", "e-mail"},
+        "title": {"title", "salutation", "prefix", "honorific"},
+        "first": {"firstname", "givenname", "forename"},
+        "last": {"lastname", "surname", "familyname"},
+    }
+
+    for header_index, row in enumerate(normalized_rows[:20]):
+        columns = {}
+        for column_index, value in enumerate(row):
+            normalized = re.sub(r"[^a-z0-9-]", "", value.lower())
+            for field, aliases in header_aliases.items():
+                if field not in columns and normalized in aliases:
+                    columns[field] = column_index
+
+        if "email" not in columns or not any(
+            field in columns for field in ("title", "first", "last")
+        ):
+            continue
+
+        names = {}
+        for data_row in normalized_rows[header_index + 1:]:
+            def cell(field):
+                index = columns.get(field)
+                return data_row[index].strip() if index is not None and index < len(data_row) else ""
+
+            full_name = " ".join(
+                part for part in (cell("title"), cell("first"), cell("last")) if part
+            )
+            if not full_name:
+                continue
+            for email in extract_emails(cell("email")):
+                names.setdefault(email, full_name)
+        return names
+
+    return {}
 
 
 @login_manager.user_loader
@@ -355,6 +480,25 @@ def validate_password(password: str) -> list[str]:
 # ── Auth email tokens ─────────────────────────────────────────────────────────
 def _get_serializer(salt: str) -> URLSafeTimedSerializer:
     return URLSafeTimedSerializer(app.config["SECRET_KEY"], salt=salt)
+
+
+def make_unsubscribe_token(user_id: int, email: str) -> str:
+    return _get_serializer("campaign-unsubscribe").dumps({
+        "user_id": user_id,
+        "email": normalize_email(email),
+    })
+
+
+def verify_unsubscribe_token(token: str):
+    try:
+        payload = _get_serializer("campaign-unsubscribe").loads(token)
+        user_id = int(payload["user_id"])
+        email = normalize_email(payload["email"])
+        if not EMAIL_RE.fullmatch(email):
+            return None
+        return user_id, email
+    except (BadSignature, TypeError, ValueError, KeyError):
+        return None
 
 
 def make_verification_token(user_id: int) -> str:
@@ -406,6 +550,11 @@ def _smtp_send(host, port, user, password, use_tls, from_addr, to_addr, msg_str)
         server.quit()
         return True
     except Exception:
+        app.logger.exception(
+            "SMTP delivery failed host=%s to_domain=%s",
+            host,
+            to_addr.rsplit("@", 1)[-1] if "@" in to_addr else "invalid",
+        )
         return False
 
 
@@ -415,8 +564,16 @@ _INLINE_IMAGE_RE = re.compile(
 )
 
 
-def _attach_html_body(msg: MIMEMultipart, body_html: str) -> None:
-    """Attach HTML and convert embedded data images into inline CID parts."""
+def _plain_text_from_html(body_html: str) -> str:
+    return BeautifulSoup(body_html, "html.parser").get_text("\n", strip=True)
+
+
+def _attach_html_body(
+    msg: MIMEMultipart,
+    body_html: str,
+    plain_text: str | None = None,
+) -> None:
+    """Attach plain/HTML alternatives and convert data images to CID parts."""
     inline_images = []
 
     def replace_image(match):
@@ -432,22 +589,81 @@ def _attach_html_body(msg: MIMEMultipart, body_html: str) -> None:
         return f"cid:{cid}"
 
     rendered_html = _INLINE_IMAGE_RE.sub(replace_image, body_html)
-    if not inline_images:
-        msg.attach(MIMEText(rendered_html, "html"))
-        return
+    alternative = MIMEMultipart("alternative")
+    alternative.attach(MIMEText(plain_text or _plain_text_from_html(rendered_html), "plain", "utf-8"))
 
-    related = MIMEMultipart("related")
-    related.attach(MIMEText(rendered_html, "html"))
-    seen = set()
-    for cid, subtype, image_data in inline_images:
-        if cid in seen:
-            continue
-        seen.add(cid)
-        image = MIMEImage(image_data, _subtype=subtype)
-        image.add_header("Content-ID", f"<{cid}>")
-        image.add_header("Content-Disposition", "inline", filename=f"{cid}.{subtype}")
-        related.attach(image)
-    msg.attach(related)
+    if inline_images:
+        related = MIMEMultipart("related")
+        related.attach(MIMEText(rendered_html, "html", "utf-8"))
+        seen = set()
+        for cid, subtype, image_data in inline_images:
+            if cid in seen:
+                continue
+            seen.add(cid)
+            image = MIMEImage(image_data, _subtype=subtype)
+            image.add_header("Content-ID", f"<{cid}>")
+            image.add_header("Content-Disposition", "inline", filename=f"{cid}.{subtype}")
+            related.attach(image)
+        alternative.attach(related)
+    else:
+        alternative.attach(MIMEText(rendered_html, "html", "utf-8"))
+    msg.attach(alternative)
+
+
+def _validated_header(value: str, label: str) -> str:
+    value = (value or "").strip()
+    if "\r" in value or "\n" in value:
+        raise ValueError(f"{label} cannot contain line breaks.")
+    return value
+
+
+def build_campaign_message(
+    user: User,
+    recipient: str,
+    subject: str,
+    body_html: str,
+    attachments=None,
+) -> MIMEMultipart:
+    from_addr = _validated_header(user.smtp_from or user.smtp_user or "", "From address")
+    sender_name = _validated_header(user.smtp_sender_name or "", "Sender name")
+    reply_to = _validated_header(user.smtp_reply_to or "", "Reply-To")
+    subject = _validated_header(subject, "Subject")
+
+    token = make_unsubscribe_token(user.id, recipient)
+    unsubscribe_url = f"{app.config['APP_DOMAIN']}/unsubscribe/{token}"
+    footer_html = (
+        '<p style="margin-top:24px;color:#6b7280;font-size:12px">'
+        f'<a href="{unsubscribe_url}">Unsubscribe</a> from future campaign emails.</p>'
+    )
+    plain_text = (
+        f"{_plain_text_from_html(body_html)}\n\n"
+        f"Unsubscribe from future campaign emails: {unsubscribe_url}"
+    )
+
+    msg = MIMEMultipart("mixed")
+    msg["From"] = formataddr((sender_name, from_addr)) if sender_name else from_addr
+    msg["To"] = recipient
+    msg["Subject"] = subject
+    msg["Date"] = formatdate(localtime=False)
+    msg["Message-ID"] = make_msgid(domain=urlparse(app.config["APP_DOMAIN"]).hostname)
+    msg["List-Unsubscribe"] = f"<{unsubscribe_url}>"
+    msg["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
+    if reply_to:
+        msg["Reply-To"] = reply_to
+    _attach_html_body(msg, body_html + footer_html, plain_text)
+
+    for att_name, att_data, att_mime in attachments or []:
+        maintype, subtype = (
+            att_mime.split("/", 1)
+            if "/" in att_mime
+            else ("application", "octet-stream")
+        )
+        part = MIMEBase(maintype, subtype)
+        part.set_payload(att_data)
+        encoders.encode_base64(part)
+        part.add_header("Content-Disposition", "attachment", filename=att_name)
+        msg.attach(part)
+    return msg
 
 
 def _send_auth_email(user: "User", subject: str, body_html: str) -> bool:
@@ -461,7 +677,8 @@ def _send_auth_email(user: "User", subject: str, body_html: str) -> bool:
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["To"]      = user.email
-    msg.attach(MIMEText(body_html, "html"))
+    msg.attach(MIMEText(_plain_text_from_html(body_html), "plain", "utf-8"))
+    msg.attach(MIMEText(body_html, "html", "utf-8"))
 
     # 1 — App-level SMTP
     if _APP_SMTP_HOST and _APP_SMTP_USER and _APP_SMTP_PASS:
@@ -477,14 +694,22 @@ def _send_auth_email(user: "User", subject: str, body_html: str) -> bool:
         try:
             smtp_pass = decrypt_password(user.smtp_pass_enc)
             from_addr = user.smtp_from or user.smtp_user
-            if "From" not in msg:
-                msg["From"] = from_addr
+            visible_from = (
+                formataddr((user.smtp_sender_name, from_addr))
+                if user.smtp_sender_name else from_addr
+            )
+            if "From" in msg:
+                msg.replace_header("From", visible_from)
+            else:
+                msg["From"] = visible_from
+            if user.smtp_reply_to:
+                msg["Reply-To"] = user.smtp_reply_to
             if _smtp_send(user.smtp_host, user.smtp_port, user.smtp_user,
                           smtp_pass, user.smtp_use_tls, from_addr, user.email,
                           msg.as_string()):
                 return True
         except Exception:
-            pass
+            app.logger.exception("User SMTP fallback failed for auth email user_id=%s", user.id)
 
     return False
 
@@ -537,54 +762,12 @@ def login():
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
-    if current_user.is_authenticated:
-        return redirect(url_for("dashboard"))
-    if request.method == "POST":
-        email = request.form.get("email", "").strip().lower()
-        password = request.form.get("password", "")
-        password2 = request.form.get("password2", "")
-        policy_errors = validate_password(password)
-        if policy_errors:
-            return render_template("register.html", password_errors=policy_errors, email=email, canonical_url=get_domain() + "/register")
-        elif password != password2:
-            flash("Passwords do not match.", "error")
-            return render_template("register.html", password_errors=[], email=email, canonical_url=get_domain() + "/register")
-        elif User.query.filter_by(email=email).first():
-            flash("An account with that email already exists.", "error")
-        else:
-            user = User(
-                email=email,
-                password_hash=bcrypt.generate_password_hash(password).decode(),
-                verified=False,
-            )
-            db.session.add(user)
-            db.session.commit()
-            # Send verification email
-            token = make_verification_token(user.id)
-            verify_url = get_domain() + url_for("verify_email", token=token)
-            sent = _send_auth_email(
-                user,
-                "Verify your RushMail account",
-                f"""
-                <p>Hi,</p>
-                <p>Thanks for signing up to RushMail! Click the button below to verify your email address.
-                This link expires in 24 hours.</p>
-                <p><a href="{verify_url}" style="background:#f97316;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;font-weight:bold">Verify Email</a></p>
-                <p>Or paste this link into your browser:<br><a href="{verify_url}">{verify_url}</a></p>
-                """,
-            )
-            if sent:
-                flash("Account created! Check your email to verify your address before signing in.", "success")
-            else:
-                # No app-level or user SMTP available — surface the verify link
-                # directly so the user can verify without email delivery.
-                flash(
-                    f'Account created! Email delivery is not configured, so click this link to verify your account: '
-                    f'<a href="{verify_url}">{verify_url}</a>',
-                    "success"
-                )
-            return redirect(url_for("login"))
-    return render_template("register.html", password_errors=[], canonical_url=get_domain() + "/register")
+    flash(
+        "RushMail accounts are provisioned by Kingship Intelligence. "
+        "Contact us if you need access.",
+        "error",
+    )
+    return redirect(url_for("login"))
 
 
 @app.route("/verify/<token>")
@@ -688,6 +871,30 @@ def logout():
     return redirect(url_for("login"))
 
 
+@app.route("/unsubscribe/<token>", methods=["GET", "POST"])
+@csrf.exempt
+def unsubscribe(token):
+    verified = verify_unsubscribe_token(token)
+    if not verified:
+        return render_template("unsubscribe.html", invalid=True, unsubscribed=False), 400
+
+    user_id, email = verified
+    sender = User.query.get(user_id)
+    if not sender:
+        return render_template("unsubscribe.html", invalid=True, unsubscribed=False), 400
+
+    unsubscribed = request.method == "POST"
+    if unsubscribed:
+        suppress_recipient(user_id, email)
+    return render_template(
+        "unsubscribe.html",
+        invalid=False,
+        unsubscribed=unsubscribed,
+        email=email,
+        token=token,
+    )
+
+
 # ── Dashboard ─────────────────────────────────────────────────────────────────
 @app.route("/dashboard")
 @login_required
@@ -701,7 +908,7 @@ def dashboard():
     )
 
     campaign_metrics = {
-        campaign.id: {"sent": 0, "failed": 0, "pending": 0}
+        campaign.id: {"sent": 0, "failed": 0, "pending": 0, "suppressed": 0}
         for campaign in campaigns
     }
     campaign_ids = list(campaign_metrics)
@@ -722,7 +929,9 @@ def dashboard():
 
     for campaign in campaigns:
         metrics = campaign_metrics[campaign.id]
-        recipient_total = metrics["sent"] + metrics["failed"] + metrics["pending"]
+        recipient_total = (
+            metrics["sent"] + metrics["failed"] + metrics["pending"] + metrics["suppressed"]
+        )
         if recipient_total == 0 and campaign.total:
             metrics["sent"] = campaign.sent_ok or 0
             metrics["failed"] = campaign.sent_fail or 0
@@ -731,7 +940,7 @@ def dashboard():
             )
         metrics["total"] = max(
             campaign.total or 0,
-            metrics["sent"] + metrics["failed"] + metrics["pending"],
+            metrics["sent"] + metrics["failed"] + metrics["pending"] + metrics["suppressed"],
         )
         attempted = metrics["sent"] + metrics["failed"]
         metrics["sent_rate"] = round(metrics["sent"] / attempted * 100, 1) if attempted else None
@@ -745,6 +954,7 @@ def dashboard():
         "campaigns": len(campaigns),
         "sent_ok": sum(metrics["sent"] for metrics in campaign_metrics.values()),
         "sent_fail": sum(metrics["failed"] for metrics in campaign_metrics.values()),
+        "suppressed": sum(metrics["suppressed"] for metrics in campaign_metrics.values()),
     }
     attempted = stats["sent_ok"] + stats["sent_fail"]
     stats["sent_rate"] = round(stats["sent_ok"] / attempted * 100, 1) if attempted else None
@@ -823,7 +1033,7 @@ def campaign_save_draft():
     emails = data.get("emails") or []
     if not isinstance(emails, list):
         return jsonify({"error": "Invalid recipient list."}), 400
-    emails = [str(email).strip().lower() for email in emails if str(email).strip()]
+    emails = [normalize_email(email) for email in emails if normalize_email(email)]
     emails = list(dict.fromkeys(emails))
 
     names_map = data.get("names") or {}
@@ -873,16 +1083,19 @@ def campaign_detail(campaign_id):
         sent = sum(1 for recipient in recipients if recipient.status == "sent")
         failed = sum(1 for recipient in recipients if recipient.status == "failed")
         pending = sum(1 for recipient in recipients if recipient.status == "pending")
+        suppressed = sum(1 for recipient in recipients if recipient.status == "suppressed")
     else:
         sent = campaign.sent_ok or 0
         failed = campaign.sent_fail or 0
         pending = max((campaign.total or 0) - sent - failed, 0)
+        suppressed = 0
     attempted = sent + failed
     metrics = {
-        "total": max(campaign.total or 0, sent + failed + pending),
+        "total": max(campaign.total or 0, sent + failed + pending + suppressed),
         "sent": sent,
         "failed": failed,
         "pending": pending,
+        "suppressed": suppressed,
         "sent_rate": round(sent / attempted * 100, 1) if attempted else None,
     }
     return render_template(
@@ -1063,15 +1276,34 @@ def extract():
     f = request.files["file"]
     filename = f.filename.lower()
     text = ""
+    uploaded_names = {}
+
+    def add_rows(rows):
+        nonlocal text
+        rows = list(rows)
+        for row in rows:
+            text += " ".join("" if value is None else str(value) for value in row) + " "
+        for email, name in extract_contact_names(rows).items():
+            uploaded_names.setdefault(email, name)
 
     try:
-        if filename.endswith(".xlsx") or filename.endswith(".xls"):
+        if filename.endswith(".xlsx"):
             wb = openpyxl.load_workbook(f, data_only=True)
             for sheet in wb.worksheets:
-                for row in sheet.iter_rows():
-                    for cell in row:
-                        if cell.value:
-                            text += str(cell.value) + " "
+                add_rows(
+                    [cell.value for cell in row]
+                    for row in sheet.iter_rows()
+                )
+
+        elif filename.endswith(".xls"):
+            import xlrd
+            workbook = xlrd.open_workbook(file_contents=f.read())
+            for sheet in workbook.sheets():
+                add_rows(
+                    [sheet.cell_value(row_index, column_index)
+                     for column_index in range(sheet.ncols)]
+                    for row_index in range(sheet.nrows)
+                )
 
         elif filename.endswith(".csv"):
             raw = f.read()
@@ -1080,8 +1312,7 @@ def extract():
             except UnicodeDecodeError:
                 decoded = raw.decode("latin-1")
             reader = csv.reader(io.StringIO(decoded))
-            for row in reader:
-                text += " ".join(row) + " "
+            add_rows(reader)
 
         elif filename.endswith(".pdf"):
             import pdfplumber
@@ -1090,6 +1321,8 @@ def extract():
                     page_text = page.extract_text()
                     if page_text:
                         text += page_text + " "
+                    for table in page.extract_tables():
+                        add_rows(table)
 
         elif filename.endswith(".docx"):
             from docx import Document
@@ -1097,9 +1330,10 @@ def extract():
             for para in doc.paragraphs:
                 text += para.text + " "
             for table in doc.tables:
-                for row in table.rows:
-                    for cell in row.cells:
-                        text += cell.text + " "
+                add_rows(
+                    [cell.text for cell in row.cells]
+                    for row in table.rows
+                )
 
         else:
             raw = f.read()
@@ -1112,7 +1346,10 @@ def extract():
         return jsonify({"error": f"Could not parse file: {e}"}), 400
 
     emails = extract_emails(text)
-    names = {e: derive_name_from_email(e) for e in emails}
+    names = {
+        email: uploaded_names.get(email) or derive_name_from_email(email)
+        for email in emails
+    }
     return jsonify({"emails": emails, "names": names, "total": len(emails)})
 
 
@@ -1239,8 +1476,9 @@ def generate():
         if "subject" not in result or "body" not in result:
             raise ValueError("Missing keys in AI response")
         return jsonify(result)
-    except Exception as e:
-        return jsonify({"error": f"AI generation failed: {e}"}), 500
+    except Exception:
+        app.logger.exception("AI generation failed user_id=%s", current_user.id)
+        return jsonify({"error": "AI generation failed. Please try again."}), 500
 
 
 def _mark_pending_recipients_failed(campaign: Campaign, error: str):
@@ -1322,6 +1560,12 @@ def _send_campaign_background(campaign_id: int):
             return
 
         for index, r in enumerate(pending):
+            if is_suppressed(campaign.user_id, r.email):
+                r.status = "suppressed"
+                r.error = "Recipient unsubscribed before delivery."
+                db.session.commit()
+                continue
+
             if not _consume_daily_send_slot(campaign.user_id):
                 blocked = pending[index:]
                 _create_quota_overflow_schedule(
@@ -1351,21 +1595,13 @@ def _send_campaign_background(campaign_id: int):
                 break
 
             try:
-                msg = MIMEMultipart("mixed")
-                msg["From"]    = from_addr
-                msg["To"]      = r.email
-                msg["Subject"] = personalize_text(subject, r.email, r.name or "")
-                _attach_html_body(
-                    msg,
+                msg = build_campaign_message(
+                    user,
+                    r.email,
+                    personalize_text(subject, r.email, r.name or ""),
                     personalize_text(body, r.email, r.name or ""),
+                    attachments,
                 )
-                for att_name, att_data, att_mime in attachments:
-                    maintype, subtype = att_mime.split("/", 1) if "/" in att_mime else ("application", "octet-stream")
-                    part = MIMEBase(maintype, subtype)
-                    part.set_payload(att_data)
-                    encoders.encode_base64(part)
-                    part.add_header("Content-Disposition", "attachment", filename=att_name)
-                    msg.attach(part)
                 raw = msg.as_string()
                 try:
                     server.sendmail(from_addr, r.email, raw)
@@ -1460,9 +1696,11 @@ def send_bulk():
     if not current_user.smtp_host:
         return jsonify({"error": "SMTP is not configured. Go to Settings."}), 400
 
+    suppressed = suppressed_emails(current_user.id, emails)
+    active_emails = [email for email in emails if email not in suppressed]
     quota = _daily_quota_status(current_user.id)
     schedule_overflow = request.form.get("schedule_overflow") == "true"
-    overflow_count = max(len(emails) - quota["remaining"], 0)
+    overflow_count = max(len(active_emails) - quota["remaining"], 0)
     if overflow_count and not schedule_overflow:
         return jsonify({
             "code": "daily_limit_exceeded",
@@ -1478,8 +1716,8 @@ def send_bulk():
             "scheduled_for": _utc_tomorrow_start().isoformat(),
         }), 429
 
-    send_emails = emails[:quota["remaining"]]
-    overflow_emails = emails[quota["remaining"]:]
+    send_emails = active_emails[:quota["remaining"]]
+    overflow_emails = active_emails[quota["remaining"]:]
     overflow_schedule = None
     if overflow_emails:
         overflow_schedule = _create_quota_overflow_schedule(
@@ -1491,7 +1729,7 @@ def send_bulk():
             names_map,
         )
 
-    if not send_emails:
+    if not send_emails and overflow_emails:
         if draft:
             db.session.delete(draft)
         db.session.commit()
@@ -1499,6 +1737,7 @@ def send_bulk():
             "ok": True,
             "scheduled_only": True,
             "scheduled_count": len(overflow_emails),
+            "suppressed_count": len(suppressed),
             "scheduled_for": overflow_schedule.next_run_at.isoformat(),
             "message": (
                 f"Today's {DAILY_SEND_LIMIT}-email limit is reached. "
@@ -1518,7 +1757,7 @@ def send_bulk():
     campaign.name = campaign_name
     campaign.subject = subject
     campaign.body = body
-    campaign.total = len(send_emails)
+    campaign.total = len(send_emails) + len(suppressed)
     campaign.sent_ok = 0
     campaign.sent_fail = 0
     campaign.status = "queued"
@@ -1536,6 +1775,17 @@ def send_bulk():
             email=email,
             name=resolve_recipient_name(email, names_map) or None,
         ))
+    for email in suppressed:
+        db.session.add(CampaignRecipient(
+            campaign_id=campaign.id,
+            email=email,
+            name=resolve_recipient_name(email, names_map) or None,
+            status="suppressed",
+            error="Recipient previously unsubscribed.",
+        ))
+
+    if not send_emails:
+        campaign.status = "completed"
 
     db.session.commit()
     campaign_id = campaign.id
@@ -1543,23 +1793,25 @@ def send_bulk():
     if attachments:
         _pending_attachments[campaign_id] = attachments
 
-    # Dispatch to background scheduler — no HTTP connection dependency
-    if _scheduler and _scheduler.running:
-        _scheduler.add_job(
-            _send_campaign_background,
-            args=[campaign_id],
-            id=f"send_campaign_{campaign_id}",
-            replace_existing=True,
-        )
-    else:
-        import threading
-        threading.Thread(
-            target=_send_campaign_background, args=[campaign_id], daemon=True
-        ).start()
+    # Dispatch to background scheduler — no HTTP connection dependency.
+    if send_emails:
+        if _scheduler and _scheduler.running:
+            _scheduler.add_job(
+                _send_campaign_background,
+                args=[campaign_id],
+                id=f"send_campaign_{campaign_id}",
+                replace_existing=True,
+            )
+        else:
+            import threading
+            threading.Thread(
+                target=_send_campaign_background, args=[campaign_id], daemon=True
+            ).start()
 
     return jsonify({
         "campaign_id": campaign_id,
-        "total": len(send_emails),
+        "total": len(send_emails) + len(suppressed),
+        "suppressed_count": len(suppressed),
         "scheduled_count": len(overflow_emails),
         "scheduled_for": overflow_schedule.next_run_at.isoformat() if overflow_schedule else None,
     })
@@ -1574,7 +1826,10 @@ def campaign_status(campaign_id):
     sent    = CampaignRecipient.query.filter_by(campaign_id=campaign_id, status="sent").count()
     failed  = CampaignRecipient.query.filter_by(campaign_id=campaign_id, status="failed").count()
     pending = CampaignRecipient.query.filter_by(campaign_id=campaign_id, status="pending").count()
-    if sent + failed + pending == 0 and campaign.total:
+    suppressed = CampaignRecipient.query.filter_by(
+        campaign_id=campaign_id, status="suppressed"
+    ).count()
+    if sent + failed + pending + suppressed == 0 and campaign.total:
         sent = campaign.sent_ok or 0
         failed = campaign.sent_fail or 0
         pending = max(campaign.total - sent - failed, 0)
@@ -1582,10 +1837,11 @@ def campaign_status(campaign_id):
     payload = {
         "campaign_id": campaign_id,
         "status":      campaign.status,
-        "total":       max(campaign.total or 0, sent + failed + pending),
+        "total":       max(campaign.total or 0, sent + failed + pending + suppressed),
         "sent":        sent,
         "failed":      failed,
         "pending":     pending,
+        "suppressed":  suppressed,
     }
     attempted = sent + failed
     payload["sent_rate"] = round(sent / attempted * 100, 1) if attempted else None
@@ -1614,13 +1870,39 @@ def campaign_status(campaign_id):
 # ── Settings ──────────────────────────────────────────────────────────────────
 @app.route("/settings", methods=["GET", "POST"])
 @login_required
-@subscription_required
 def settings():
     if request.method == "POST":
+        try:
+            smtp_port = int(request.form.get("smtp_port", 587) or 587)
+            if not 1 <= smtp_port <= 65535:
+                raise ValueError
+        except ValueError:
+            flash("SMTP port must be between 1 and 65535.", "error")
+            return redirect(url_for("settings"))
+
+        smtp_from = request.form.get("smtp_from", "").strip()
+        reply_to = request.form.get("smtp_reply_to", "").strip()
+        sender_name = request.form.get("smtp_sender_name", "").strip()
+        try:
+            _validated_header(smtp_from, "From address")
+            _validated_header(reply_to, "Reply-To")
+            _validated_header(sender_name, "Sender name")
+        except ValueError as error:
+            flash(str(error), "error")
+            return redirect(url_for("settings"))
+        if smtp_from and not EMAIL_RE.fullmatch(smtp_from):
+            flash("From address must be a valid email address.", "error")
+            return redirect(url_for("settings"))
+        if reply_to and not EMAIL_RE.fullmatch(reply_to):
+            flash("Reply-To must be a valid email address.", "error")
+            return redirect(url_for("settings"))
+
         current_user.smtp_host = request.form.get("smtp_host", "").strip() or None
-        current_user.smtp_port = int(request.form.get("smtp_port", 587) or 587)
+        current_user.smtp_port = smtp_port
         current_user.smtp_user = request.form.get("smtp_user", "").strip() or None
-        current_user.smtp_from = request.form.get("smtp_from", "").strip() or None
+        current_user.smtp_from = smtp_from or None
+        current_user.smtp_sender_name = sender_name or None
+        current_user.smtp_reply_to = reply_to or None
         current_user.smtp_use_tls = "smtp_use_tls" in request.form
         new_pass = request.form.get("smtp_pass", "").strip()
         if new_pass:
@@ -1629,6 +1911,141 @@ def settings():
         flash("Settings saved.", "success")
         return redirect(url_for("settings"))
     return render_template("settings.html", stripe_enabled=STRIPE_ENABLED)
+
+
+@app.route("/account/export")
+@login_required
+def account_export():
+    campaigns = Campaign.query.filter_by(user_id=current_user.id).all()
+    campaign_ids = [campaign.id for campaign in campaigns]
+    recipients = (
+        CampaignRecipient.query.filter(CampaignRecipient.campaign_id.in_(campaign_ids)).all()
+        if campaign_ids else []
+    )
+    schedules = ScheduledCampaign.query.filter_by(user_id=current_user.id).all()
+    usage = DailySendUsage.query.filter_by(user_id=current_user.id).all()
+    suppressions = Suppression.query.filter_by(user_id=current_user.id).all()
+
+    payload = {
+        "exported_at": datetime.utcnow().isoformat() + "Z",
+        "account": {
+            "email": current_user.email,
+            "plan": current_user.plan,
+            "verified": current_user.verified,
+            "created_at": current_user.created_at.isoformat() if current_user.created_at else None,
+            "smtp": {
+                "host": current_user.smtp_host,
+                "port": current_user.smtp_port,
+                "username": current_user.smtp_user,
+                "from_address": current_user.smtp_from,
+                "sender_name": current_user.smtp_sender_name,
+                "reply_to": current_user.smtp_reply_to,
+                "use_tls": current_user.smtp_use_tls,
+            },
+        },
+        "campaigns": [
+            {
+                "id": campaign.id,
+                "name": campaign.name,
+                "subject": campaign.subject,
+                "body": campaign.body,
+                "status": campaign.status,
+                "total": campaign.total,
+                "sent": campaign.sent_ok,
+                "failed": campaign.sent_fail,
+                "created_at": campaign.created_at.isoformat() if campaign.created_at else None,
+                "recipients": [
+                    {
+                        "email": recipient.email,
+                        "name": recipient.name,
+                        "status": recipient.status,
+                        "error": recipient.error,
+                        "sent_at": recipient.sent_at.isoformat() if recipient.sent_at else None,
+                    }
+                    for recipient in recipients
+                    if recipient.campaign_id == campaign.id
+                ],
+            }
+            for campaign in campaigns
+        ],
+        "schedules": [
+            {
+                "name": schedule.name,
+                "subject": schedule.subject,
+                "body": schedule.body,
+                "emails": schedule.emails,
+                "names": schedule.names,
+                "next_run_at": schedule.next_run_at.isoformat(),
+                "last_run_at": schedule.last_run_at.isoformat() if schedule.last_run_at else None,
+                "active": schedule.active,
+                "frequency": schedule.frequency,
+            }
+            for schedule in schedules
+        ],
+        "suppressions": [
+            {
+                "email": suppression.email,
+                "source": suppression.source,
+                "created_at": suppression.created_at.isoformat(),
+            }
+            for suppression in suppressions
+        ],
+        "daily_usage": [
+            {
+                "date": row.usage_date.isoformat(),
+                "attempt_count": row.attempt_count,
+            }
+            for row in usage
+        ],
+    }
+    response = Response(
+        json.dumps(payload, indent=2),
+        mimetype="application/json",
+    )
+    response.headers["Content-Disposition"] = "attachment; filename=rushmail-account-export.json"
+    return response
+
+
+@app.route("/account/delete", methods=["POST"])
+@login_required
+def account_delete():
+    password = request.form.get("password", "")
+    confirmation = request.form.get("confirmation", "").strip()
+    if confirmation != "DELETE":
+        flash('Type "DELETE" to confirm account deletion.', "error")
+        return redirect(url_for("settings"))
+    if not bcrypt.check_password_hash(current_user.password_hash, password):
+        flash("Your password was incorrect. Account not deleted.", "error")
+        return redirect(url_for("settings"))
+
+    user_id = current_user.id
+    if current_user.stripe_subscription_id and STRIPE_ENABLED:
+        try:
+            stripe.Subscription.cancel(current_user.stripe_subscription_id)
+        except stripe.error.StripeError:
+            app.logger.exception("Stripe subscription cancellation failed for user_id=%s", user_id)
+            flash("Could not cancel your subscription. Account was not deleted.", "error")
+            return redirect(url_for("settings"))
+
+    campaign_ids = [
+        row[0] for row in db.session.query(Campaign.id).filter_by(user_id=user_id).all()
+    ]
+    if campaign_ids:
+        CampaignRecipient.query.filter(
+            CampaignRecipient.campaign_id.in_(campaign_ids)
+        ).delete(synchronize_session=False)
+    Campaign.query.filter_by(user_id=user_id).delete(synchronize_session=False)
+    ScheduledCampaign.query.filter_by(user_id=user_id).delete(synchronize_session=False)
+    DailySendUsage.query.filter_by(user_id=user_id).delete(synchronize_session=False)
+    Suppression.query.filter_by(user_id=user_id).delete(synchronize_session=False)
+    user = User.query.get(user_id)
+    logout_user()
+    if user:
+        db.session.delete(user)
+    db.session.commit()
+    session.clear()
+    flash("Your RushMail account and local data were deleted.", "success")
+    return redirect(url_for("index"))
 
 
 @app.route("/settings/test-email", methods=["POST"])
@@ -1659,7 +2076,12 @@ def settings_test_email():
         "plain",
     )
     msg["Subject"] = "RushMail SMTP test"
-    msg["From"] = from_addr
+    msg["From"] = (
+        formataddr((current_user.smtp_sender_name, from_addr))
+        if current_user.smtp_sender_name else from_addr
+    )
+    if current_user.smtp_reply_to:
+        msg["Reply-To"] = current_user.smtp_reply_to
     to_addr = current_user.smtp_from or current_user.smtp_user
     msg["To"] = to_addr
 
@@ -1677,8 +2099,9 @@ def settings_test_email():
         server.login(current_user.smtp_user, smtp_pass)
         server.sendmail(from_addr, [to_addr], msg.as_string())
         server.quit()
-    except Exception as e:
-        return jsonify({"error": f"{type(e).__name__}: {e}"}), 400
+    except Exception:
+        app.logger.exception("SMTP test failed user_id=%s", current_user.id)
+        return jsonify({"error": "SMTP test failed. Check your saved provider settings."}), 400
 
     return jsonify({"ok": True, "message": f"Test email sent to {to_addr} — check your inbox."})
 
@@ -1725,6 +2148,7 @@ def subscribe():
 @login_required
 def subscribe_success():
     session_id = request.args.get("session_id")
+    activated = False
     if session_id and STRIPE_ENABLED:
         try:
             session = stripe.checkout.Session.retrieve(session_id)
@@ -1738,10 +2162,14 @@ def subscribe_success():
                 current_user.stripe_subscription_id = session.subscription
                 current_user.plan = "pro"
                 db.session.commit()
+                activated = True
         except Exception:
-            pass
-    flash("Welcome to RushMail Pro! Your account is now active.", "success")
-    return redirect(url_for("dashboard"))
+            app.logger.exception("Stripe checkout verification failed user_id=%s", current_user.id)
+    if activated:
+        flash("Welcome to RushMail Pro! Your account is now active.", "success")
+        return redirect(url_for("dashboard"))
+    flash("We could not verify the subscription yet. Please refresh or contact support.", "error")
+    return redirect(url_for("pricing"))
 
 
 @app.route("/billing-portal")
@@ -1806,11 +2234,25 @@ def _fire_scheduled_campaign(sc_id: int, smtp_cfg: dict):
         names_map = sc.names
         subject = sc.subject
         body = sc.body
+        sender = User.query.get(sc.user_id)
+        if not sender:
+            return
         from_addr = smtp_cfg["from"] or smtp_cfg["user"]
+        suppressed = suppressed_emails(sc.user_id, emails)
+        active_emails = [email for email in emails if email not in suppressed]
         quota = _daily_quota_status(sc.user_id)
-        send_now = emails[:quota["remaining"]]
-        deferred = emails[quota["remaining"]:]
-        results = []
+        send_now = active_emails[:quota["remaining"]]
+        deferred = active_emails[quota["remaining"]:]
+        results = [
+            (
+                addr,
+                resolve_recipient_name(addr, names_map),
+                "suppressed",
+                "Recipient previously unsubscribed.",
+                None,
+            )
+            for addr in suppressed
+        ]
 
         if not send_now:
             if deferred:
@@ -1818,7 +2260,9 @@ def _fire_scheduled_campaign(sc_id: int, smtp_cfg: dict):
                     sc.user_id, sc.name, subject, body, deferred, names_map
                 )
                 db.session.commit()
-            return
+                deferred = []
+            if not results:
+                return
 
         server = None
         try:
@@ -1842,17 +2286,28 @@ def _fire_scheduled_campaign(sc_id: int, smtp_cfg: dict):
             ]
         else:
             for index, addr in enumerate(send_now):
+                if is_suppressed(sc.user_id, addr):
+                    results.append((
+                        addr,
+                        resolve_recipient_name(addr, names_map),
+                        "suppressed",
+                        "Recipient unsubscribed before delivery.",
+                        None,
+                    ))
+                    continue
+
                 if not _consume_daily_send_slot(sc.user_id):
                     deferred = send_now[index:] + deferred
                     break
 
                 name = resolve_recipient_name(addr, names_map)
                 try:
-                    msg = MIMEMultipart("mixed")
-                    msg["From"] = from_addr
-                    msg["To"] = addr
-                    msg["Subject"] = personalize_text(subject, addr, name)
-                    _attach_html_body(msg, personalize_text(body, addr, name))
+                    msg = build_campaign_message(
+                        sender,
+                        addr,
+                        personalize_text(subject, addr, name),
+                        personalize_text(body, addr, name),
+                    )
                     server.sendmail(from_addr, addr, msg.as_string())
                     results.append((addr, name, "sent", "", datetime.utcnow()))
                 except Exception as error:
@@ -1869,7 +2324,7 @@ def _fire_scheduled_campaign(sc_id: int, smtp_cfg: dict):
 
         # Record as a Campaign for history
         ok = sum(1 for result in results if result[2] == "sent")
-        fail = len(results) - ok
+        fail = sum(1 for result in results if result[2] == "failed")
         c = Campaign(
             user_id=sc.user_id,
             name=f"[Scheduled] {sc.name}",
@@ -2163,11 +2618,6 @@ def sitemap_xml():
     <changefreq>weekly</changefreq>
     <priority>1.0</priority>
   </url>
-  <url>
-    <loc>{domain}/register</loc>
-    <changefreq>monthly</changefreq>
-    <priority>0.7</priority>
-  </url>
 </urlset>"""
     return Response(content, mimetype="application/xml")
 
@@ -2189,44 +2639,11 @@ def llms_txt():
     return Response(content, mimetype="text/plain")
 
 
-# ── Init ──────────────────────────────────────────────────────────────────────
-with app.app_context():
-    db.create_all()
-    # Lightweight migrations: db.create_all() won't add columns to existing tables.
-    try:
-        from sqlalchemy import inspect, text
-        inspector = inspect(db.engine)
-        if "scheduled_campaigns" in inspector.get_table_names():
-            cols = [c["name"] for c in inspector.get_columns("scheduled_campaigns")]
-            if "frequency" not in cols:
-                db.session.execute(text(
-                    "ALTER TABLE scheduled_campaigns ADD COLUMN frequency VARCHAR(20) NOT NULL DEFAULT 'weekly'"
-                ))
-                db.session.commit()
-            if "names_json" not in cols:
-                db.session.execute(text(
-                    "ALTER TABLE scheduled_campaigns ADD COLUMN names_json TEXT"
-                ))
-                db.session.commit()
-        if "campaign_recipients" in inspector.get_table_names():
-            rec_cols = [c["name"] for c in inspector.get_columns("campaign_recipients")]
-            if "name" not in rec_cols:
-                db.session.execute(text(
-                    "ALTER TABLE campaign_recipients ADD COLUMN name VARCHAR(255)"
-                ))
-                db.session.commit()
-        if "users" in inspector.get_table_names():
-            user_cols = [c["name"] for c in inspector.get_columns("users")]
-            if "verified" not in user_cols:
-                db.session.execute(text(
-                    "ALTER TABLE users ADD COLUMN verified BOOLEAN NOT NULL DEFAULT TRUE"
-                ))
-                db.session.commit()
-    except Exception:
-        db.session.rollback()
-
 # Start background scheduler (only in the reloader child in dev; always in prod)
-if os.environ.get("WERKZEUG_RUN_MAIN") == "true" or not app.debug:
+if (
+    os.environ.get("DISABLE_SCHEDULER") != "1"
+    and (os.environ.get("WERKZEUG_RUN_MAIN") == "true" or not app.debug)
+):
     _scheduler = BackgroundScheduler(daemon=True)
     _scheduler.add_job(run_scheduled_campaigns, "interval", hours=1, max_instances=1)
     _scheduler.start()

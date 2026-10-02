@@ -32,6 +32,10 @@
     <div class="stat-card__label">Failed</div>
   </div>
   <div class="stat-card">
+    <div class="stat-card__num" id="dashboard-suppressed">{{ stats.suppressed }}</div>
+    <div class="stat-card__label">Suppressed</div>
+  </div>
+  <div class="stat-card">
     <div class="stat-card__num" id="dashboard-sent-rate">{{ (stats.sent_rate ~ '%') if stats.sent_rate is not none else '—' }}</div>
     <div class="stat-card__label">Sent Rate</div>
   </div>
@@ -51,13 +55,14 @@
         <th>Status</th>
         <th>Sent</th>
         <th>Failed</th>
+        <th>Suppressed</th>
         <th></th>
       </tr>
     </thead>
     <tbody>
       {% for c in campaigns %}
       {% set metrics = campaign_metrics[c.id] %}
-      <tr data-campaign-row data-campaign-id="{{ c.id }}" data-status="{{ c.status }}" data-total="{{ metrics.total }}" data-sent="{{ metrics.sent }}" data-failed="{{ metrics.failed }}">
+      <tr data-campaign-row data-campaign-id="{{ c.id }}" data-status="{{ c.status }}" data-total="{{ metrics.total }}" data-sent="{{ metrics.sent }}" data-failed="{{ metrics.failed }}" data-suppressed="{{ metrics.suppressed }}">
         <td><strong>{{ c.name }}</strong><br><small class="muted">{{ c.subject }}</small></td>
         <td>{{ c.created_at.strftime('%b %d, %Y') }}</td>
         <td>{{ metrics.total }}</td>
@@ -67,6 +72,7 @@
           <span class="badge badge--red" data-campaign-failed>{{ metrics.failed }}</span>
           <small class="muted" data-campaign-failure-rate>{{ ('(' ~ metrics.failure_rate ~ '%)') if metrics.failure_rate is not none else '' }}</small>
         </td>
+        <td><span class="badge badge--gray" data-campaign-suppressed>{{ metrics.suppressed }}</span></td>
         <td>
           {% if c.status == 'draft' %}
           <a href="{{ url_for('campaign_edit', campaign_id=c.id) }}" class="btn btn--sm btn--primary">Continue editing</a>
@@ -109,12 +115,14 @@
   function recomputeSummary() {
     const sent = rows.reduce((sum, row) => sum + Number(row.dataset.sent || 0), 0);
     const failed = rows.reduce((sum, row) => sum + Number(row.dataset.failed || 0), 0);
+    const suppressed = rows.reduce((sum, row) => sum + Number(row.dataset.suppressed || 0), 0);
     const attempted = sent + failed;
     const sentRate = attempted ? Math.round((sent / attempted) * 1000) / 10 : null;
     const failureRate = attempted ? Math.round((failed / attempted) * 1000) / 10 : null;
 
     document.getElementById("dashboard-sent-ok").textContent = sent;
     document.getElementById("dashboard-sent-fail").textContent = failed;
+    document.getElementById("dashboard-suppressed").textContent = suppressed;
     document.getElementById("dashboard-sent-rate").textContent = formatRate(sentRate);
     document.getElementById("dashboard-failure-rate").textContent = formatRate(failureRate);
   }
@@ -123,11 +131,14 @@
     const sent = status.sent || 0;
     const failed = status.failed || 0;
     const pending = status.pending || 0;
+    const suppressed = status.suppressed || 0;
     row.dataset.status = status.status;
     row.dataset.sent = sent;
     row.dataset.failed = failed;
+    row.dataset.suppressed = suppressed;
     row.querySelector("[data-campaign-sent]").textContent = sent;
     row.querySelector("[data-campaign-failed]").textContent = failed;
+    row.querySelector("[data-campaign-suppressed]").textContent = suppressed;
     row.querySelector("[data-campaign-failure-rate]").textContent =
       status.failure_rate === null || status.failure_rate === undefined
         ? ""

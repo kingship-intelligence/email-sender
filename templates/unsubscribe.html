@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Unsubscribe{% endblock %}
+
+{% block content %}
+<div class="card" style="max-width:560px;margin:3rem auto;text-align:center">
+  {% if invalid %}
+    <h1 class="card-title">This unsubscribe link is invalid</h1>
+    <p class="card-sub">The link may be incomplete. Contact the sender directly if you no longer want their emails.</p>
+  {% elif unsubscribed %}
+    <h1 class="card-title">You’re unsubscribed</h1>
+    <p class="card-sub">{{ email }} will no longer receive campaign emails from this sender.</p>
+  {% else %}
+    <h1 class="card-title">Unsubscribe from campaign emails?</h1>
+    <p class="card-sub">Confirm that {{ email }} should no longer receive campaign emails from this sender.</p>
+    <form method="POST" action="{{ url_for('unsubscribe', token=token) }}">
+      <button type="submit" class="btn btn--primary">Confirm unsubscribe</button>
+    </form>
+  {% endif %}
+</div>
+{% endblock %}

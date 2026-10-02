@@ -48,6 +48,10 @@
     <div class="stat-card__num">{{ metrics.failed }}</div>
     <div class="stat-card__label">Failed</div>
   </div>
+  <div class="stat-card">
+    <div class="stat-card__num">{{ metrics.suppressed }}</div>
+    <div class="stat-card__label">Suppressed</div>
+  </div>
   {% if metrics.sent_rate is not none %}
   <div class="stat-card">
     <div class="stat-card__num">{{ metrics.sent_rate }}%</div>
@@ -90,6 +94,8 @@
               <span class="badge badge--green">Sent (accepted)</span>
             {% elif r.status == 'pending' %}
               <span class="badge badge--gray">Pending</span>
+            {% elif r.status == 'suppressed' %}
+              <span class="badge badge--gray">Suppressed</span>
             {% else %}
               <span class="badge badge--red">Failed</span>
             {% endif %}

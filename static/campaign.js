@@ -69,11 +69,16 @@ function hasMergeTags(text) {
 function personalizePreview(text, email) {
   const full = (names[email] || "").trim();
   const parts = full.split(/\s+/).filter(Boolean);
+  const titles = new Set([
+    "mr", "mr.", "mrs", "mrs.", "ms", "ms.", "miss", "mx", "mx.",
+    "dr", "dr.", "prof", "prof.", "sir", "dame", "rev", "rev."
+  ]);
+  const nameParts = parts.length && titles.has(parts[0].toLowerCase()) ? parts.slice(1) : parts;
   const values = {
     email: email,
     name: full,
-    first_name: parts[0] || "",
-    last_name: parts.length > 1 ? parts[parts.length - 1] : ""
+    first_name: nameParts[0] || "",
+    last_name: nameParts.length > 1 ? nameParts[nameParts.length - 1] : ""
   };
   return text.replace(MERGE_TAG_RE, (m, key, fallback) => {
     key = key.toLowerCase().replace("firstname", "first_name").replace("lastname", "last_name");
@@ -584,7 +589,7 @@ if (sendBtn) {
             headers: { "X-CSRFToken": getCsrfToken() }
           });
           const s = await sr.json();
-          const done = (s.sent || 0) + (s.failed || 0);
+          const done = (s.sent || 0) + (s.failed || 0) + (s.suppressed || 0);
           const pct  = total > 0 ? Math.round((done / total) * 100) : 0;
           bar.style.width = Math.max(pct, 3) + "%";
           label.textContent = `Sending… ${done} / ${total}`;
@@ -593,8 +598,10 @@ if (sendBtn) {
             clearInterval(poll);
             const ok   = s.sent   || 0;
             const fail = s.failed || 0;
+            const suppressed = s.suppressed || 0;
             bar.style.width = "100%";
-            label.textContent = `Done — ${ok} sent (SMTP accepted), ${fail} failed.` +
+            label.textContent = `Done — ${ok} sent (SMTP accepted), ${fail} failed` +
+              (suppressed ? `, ${suppressed} suppressed` : "") + "." +
               (scheduledCount ? ` ${scheduledCount} scheduled for tomorrow.` : "");
             document.getElementById("send-progress").style.display = "none";
             document.getElementById("done-ok").textContent   = ok;
@@ -624,13 +631,15 @@ function renderRecipientResults(recipients) {
 
   tbody.innerHTML = "";
 
-  const failed = recipients.filter(r => r.status !== "sent");
+  const failed = recipients.filter(r => r.status === "failed");
 
   recipients.forEach(r => {
     const tr = document.createElement("tr");
     const statusBadge = r.status === "sent"
       ? '<span class="badge badge--green">✓ sent</span>'
-      : '<span class="badge badge--red">✗ failed</span>';
+      : r.status === "suppressed"
+        ? '<span class="badge badge--gray">suppressed</span>'
+        : '<span class="badge badge--red">✗ failed</span>';
     const errorCell = r.error
       ? `<span class="recipient-error" title="${escapeHtml(r.error)}">${escapeHtml(truncate(r.error, 80))}</span>`
       : '<span class="muted">—</span>';

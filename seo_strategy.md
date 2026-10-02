@@ -9,7 +9,6 @@ Server-side rendered (Flask + Jinja2 templates). All public pages return full HT
 ## In scope
 - Homepage (`/`)
 - Login (`/login`)
-- Register (`/register`)
 - Forgot/reset password pages
 
 ## Out of scope

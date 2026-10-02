@@ -98,7 +98,6 @@
       <a href="#how">How it works</a>
       <a href="#demo">Book a demo</a>
       <a href="{{ url_for('login') }}">Sign in</a>
-      <a href="{{ url_for('register') }}" class="btn btn--primary btn--full">Get started</a>
     </div>
   </header>
 
@@ -111,7 +110,7 @@
         <p class="hp-hero__sub">Extract recipients, personalize with names, and send or schedule through your own SMTP — built for teams who want outreach without the agency overhead.</p>
         <div class="hp-hero__ctas">
           <a href="#demo" class="btn btn--primary hp-btn hp-btn--lg">Book a demo today</a>
-          <a href="{{ url_for('register') }}" class="btn btn--ghost hp-btn hp-btn--lg hp-btn--ghost">Get started</a>
+          <a href="{{ url_for('login') }}" class="btn btn--ghost hp-btn hp-btn--lg hp-btn--ghost">Sign in</a>
         </div>
       </div>
       <div class="hp-hero__stage" aria-hidden="true">
@@ -233,7 +232,6 @@
         <div>
           <h4>Account</h4>
           <a href="{{ url_for('login') }}">Sign in</a>
-          <a href="{{ url_for('register') }}">Create account</a>
         </div>
         <div>
           <h4>Company</h4>

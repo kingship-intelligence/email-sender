@@ -56,6 +56,16 @@
           <label for="smtp_from">From Address <span class="muted">(optional)</span></label>
           <input type="email" id="smtp_from" name="smtp_from" value="{{ current_user.smtp_from or '' }}" placeholder="Defaults to username" />
         </div>
+        <div class="field">
+          <label for="smtp_sender_name">Sender Name <span class="muted">(optional)</span></label>
+          <input type="text" id="smtp_sender_name" name="smtp_sender_name" value="{{ current_user.smtp_sender_name or '' }}" placeholder="Acme Team" />
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <label for="smtp_reply_to">Reply-To <span class="muted">(optional)</span></label>
+          <input type="email" id="smtp_reply_to" name="smtp_reply_to" value="{{ current_user.smtp_reply_to or '' }}" placeholder="replies@example.com" />
+        </div>
       </div>
       <div class="field field--check" style="margin-top:.75rem">
         <label>
@@ -81,12 +91,36 @@
     <div class="plan-info">
       <div class="plan-current plan-current--{{ current_user.plan }}">
         <strong>Pro Plan — $5/month</strong>
-        <p>Unlimited recipients, AI email generation, attachments, and all features included.</p>
+        <p>Up to 400 send attempts per UTC day, AI email generation, attachments, and all features included.</p>
         {% if stripe_enabled %}
         <a href="{{ url_for('billing_portal') }}" class="btn btn--ghost" style="margin-top:.75rem">Manage Billing</a>
         {% endif %}
       </div>
     </div>
+  </div>
+
+  <div class="card">
+    <h2 class="card-title">Account Data</h2>
+    <p class="card-sub">Download a copy of your account data or permanently delete your account.</p>
+    <a href="{{ url_for('account_export') }}" class="btn btn--ghost">Download my data</a>
+
+    <hr style="margin:1.5rem 0;border:0;border-top:1px solid var(--gray-100)">
+    <h3 style="margin-bottom:.5rem">Delete account</h3>
+    <p class="field__hint">This permanently deletes your campaigns, recipients, schedules, suppressions, and SMTP settings. Any active subscription will be cancelled first.</p>
+    <form method="POST" action="{{ url_for('account_delete') }}" style="margin-top:1rem">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+      <div class="row">
+        <div class="field">
+          <label for="delete-password">Current password</label>
+          <input type="password" id="delete-password" name="password" required autocomplete="current-password" />
+        </div>
+        <div class="field">
+          <label for="delete-confirmation">Type DELETE to confirm</label>
+          <input type="text" id="delete-confirmation" name="confirmation" required autocomplete="off" />
+        </div>
+      </div>
+      <button type="submit" class="btn btn--ghost" onclick="return confirm('Permanently delete your RushMail account? This cannot be undone.')">Delete my account</button>
+    </form>
   </div>
 </div>
 {% endblock %}
@@ -100,7 +134,7 @@
     var form = document.querySelector('form[action="{{ url_for("settings") }}"]');
     if (!form) return;
 
-    var fieldIds = ["smtp_host", "smtp_port", "smtp_user", "smtp_pass", "smtp_from"];
+    var fieldIds = ["smtp_host", "smtp_port", "smtp_user", "smtp_pass", "smtp_from", "smtp_sender_name", "smtp_reply_to"];
     var checkboxName = "smtp_use_tls";
 
     function readDraft() {

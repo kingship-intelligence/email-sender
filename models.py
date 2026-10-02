@@ -21,10 +21,13 @@ class User(db.Model, UserMixin):
     smtp_pass_enc = db.Column(db.Text)
     smtp_use_tls = db.Column(db.Boolean, default=True)
     smtp_from = db.Column(db.String(255))
+    smtp_sender_name = db.Column(db.String(255))
+    smtp_reply_to = db.Column(db.String(255))
 
     verified = db.Column(db.Boolean, default=False, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     campaigns = db.relationship("Campaign", backref="user", lazy=True, cascade="all, delete-orphan")
+    suppressions = db.relationship("Suppression", backref="user", lazy=True, cascade="all, delete-orphan")
 
     @property
     def is_pro(self):
@@ -105,3 +108,17 @@ class DailySendUsage(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
     usage_date = db.Column(db.Date, nullable=False)
     attempt_count = db.Column(db.Integer, default=0, nullable=False)
+
+
+class Suppression(db.Model):
+    __tablename__ = "suppressions"
+    __table_args__ = (
+        db.UniqueConstraint("user_id", "email", name="uq_suppressions_user_email"),
+        db.Index("ix_suppressions_user_email", "user_id", "email"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    email = db.Column(db.String(255), nullable=False)
+    source = db.Column(db.String(50), default="unsubscribe", nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
